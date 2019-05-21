@@ -29,8 +29,10 @@ import ca.uwaterloo.flix.util.Validation._
 object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
 
   def run(root: TypedAst.Root)(implicit flix: Flix): Validation[TypedAst.Root, TrivialError] = flix.phase("Trivial") {
-
-    // TODO: Introduce flag to disable
+    // Return early if the redundancies are allowed.
+    if (flix.options.xallowredundancies) {
+      return root.toSuccess
+    }
 
     // Find the patterns
     val pats = Catalog.allPatterns(root, flix)
@@ -195,21 +197,17 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
       leftMultiplicationByOne(),
       rightMultiplicationByOne(),
       listMapIdentity(),
-      // leftConcatenateEmptyString(), // TODO
-      // rightConcatenateEmptyString(), // TODO
-      // divisionByOne(), // TODO
-      // divisionBySelf(), // TODO
-      // leftAppendNil(), // TODO
-      // rightAppendNil(), // TODO
-      // listIsEmptyCons(), // TODO
-      // subtractionBySelf(), // TODO
+      // leftConcatenateEmptyString(),
+      // rightConcatenateEmptyString(),
+      // divisionByOne(),
+      // divisionBySelf(),
+      // leftAppendNil(),
+      // rightAppendNil(),
+      // listIsEmptyCons(),
+      // subtractionBySelf(),
     )
 
   }
-
-  // TODO: Rename patterns to something more appropriate.
-
-  // TODO: Use set instead of list of trivial errors?
 
   /**
     * Finds trivial computations in the given definition `defn0`.
@@ -495,7 +493,6 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
     }
   }
 
-  // TODO: Often we should be able to use types to quickly check if a pattern is potentially relevant
 
   // TODO: DOC
   private def unify(x: Expression, y: Expression): Option[Substitution] = (x, y) match {
@@ -940,14 +937,9 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
     }
   }
 
-
   /////////////////////////////////////////////////////////////////////////////
   // TODOs
   /////////////////////////////////////////////////////////////////////////////
-
-  // TODO: AlwaysTrue/AlwaysFalse/AlwaysConst custom errors?
-
-  // TODO: Think about distinguishing executions?
 
   // TODO: What about whole expressions divided by themselves, e.g. (x + 1) / (x + 1)?
 
@@ -969,39 +961,11 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
   // TODO: - Option.flatMap(x => if (f(x)) Some(x) else None))  --> Option.filter(f)
   // TODO - x == x or equalities that are always or never true.
 
-  // TODO: Compile to automaton or similar?
-
   // TODO: !! Could this phase not run concurrently with other phases!? We should just run all such checker phase concurrent with the rest of the entire compiler.
   // TODO: We could even start codegen while this is running.
 
-  // TODO: Introduce annotated expression, e.g. @trivial 0 + 0
-  // TODO: Introduce annotated expression: @unreachable 2 + 1, or 2 + 3 @ dead.
-  // TODO: Where should these annotations go?
-
   // TODO: JvmBackend should not always load classes
   // TODO: JvmBackend should run in parallel.
-
-  // TODO: Should we also consider tricky cases such as:
-  // match s with {
-  // case Circle(Red) =>
-  // case Circle(x) =>
-  // where we know that x cannot be red, because that would have matched?
-  // What about nested patterns like:
-  // def main(): Int =
-  //    let s = Circle(Red);
-  //    match s with {
-  //        case Circle(Red) => 123
-  //        case Square(Blu) => match s with {
-  //            case Square(Red) =>
-  //        }
-  //        case _ => Square(Blu)
-  //    }
-
-  // TODO: Write argument about dynamic checks/assertions and dead code.
-
-  // TODO: Add while(true) java case to paper?
-
-  // TODO: Ensure everything is private.
 
   //
   //thm listIsEmptyCons[a](): Bool = \forall (x: a, xs: List[a]). List.isEmpty(x :: xs) ~~> false
@@ -1012,5 +976,11 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
   //
   //law reflexive[e](⊑: (e, e) -> Bool): Bool = ∀(x: e). x ⊑ x
   //
+
+  // TODO: Rename patterns to something more appropriate.
+
+  // TODO: Use set instead of list of trivial errors?
+
+  // TODO: Often we should be able to use types to quickly check if a pattern is potentially relevant
 
 }
