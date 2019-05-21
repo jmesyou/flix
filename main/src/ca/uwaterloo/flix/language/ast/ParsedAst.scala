@@ -872,6 +872,16 @@ object ParsedAst {
     case class Cast(exp: ParsedAst.Expression, tpe: ParsedAst.Type, eff: Option[ParsedAst.Effect], sp2: SourcePosition) extends ParsedAst.Expression
 
     /**
+      * Label Expression.
+      *
+      * @param sp1  the position of the first character in the expression.
+      * @param name the label name.
+      * @param exp  the labelled expression.
+      * @param sp2  the position of the last character in the expression.
+      */
+    case class Label(sp1: SourcePosition, name: Name.Ident, exp: ParsedAst.Expression, sp2: SourcePosition) extends ParsedAst.Expression
+
+    /**
       * Try Catch Expression.
       *
       * @param sp1   the position of the first character in the expression.

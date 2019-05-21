@@ -584,8 +584,8 @@ class Parser(val source: Source) extends org.parboiled2.Parser {
       LetRec | LetMatch | IfThenElse | Match | LambdaMatch | Switch | TryCatch | Native | Lambda | Tuple |
         RecordOperation | RecordLiteral | Block | RecordSelectLambda | NewChannel |
         GetChannel | SelectChannel | ProcessSpawn | ProcessSleep | ProcessPanic | ArrayLit | ArrayNew | ArrayLength |
-        VectorLit | VectorNew | VectorLength | FNil | FSet | FMap | FixpointSolve |
-        FixpointProject | ConstraintSeq | Literal | HandleWith | Existential | Universal |
+        VectorLit | VectorNew | VectorLength | FNil | FSet | FMap |
+        FixpointSolve | FixpointProject | ConstraintSeq | Literal | HandleWith | Existential | Universal | Label |
         UnaryLambda | QName | Tag | SName | Hole
     }
 
@@ -894,6 +894,10 @@ class Parser(val source: Source) extends org.parboiled2.Parser {
 
     def Universal: Rule1[ParsedAst.Expression.Universal] = rule {
       SP ~ atomic("∀" | "\\forall") ~ optWS ~ FormalParamList ~ optWS ~ "." ~ optWS ~ Expression ~ SP ~> ParsedAst.Expression.Universal
+    }
+
+    def Label: Rule1[ParsedAst.Expression.Label] = rule {
+      SP ~ "@" ~ Names.Annotation ~ WS ~ Expression ~ SP ~> ParsedAst.Expression.Label
     }
 
   }

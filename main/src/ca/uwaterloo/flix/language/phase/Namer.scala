@@ -779,13 +779,20 @@ object Namer extends Phase[WeededAst.Program, NamedAst.Root] {
           NamedAst.Expression.Universal(p, e, loc)
       }
 
-    case WeededAst.Expression.Ascribe(exp, tpe, eff, loc) => visitExp(exp, env0, tenv0) map {
-      case e => NamedAst.Expression.Ascribe(e, visitType(tpe, tenv0), eff, loc)
-    }
+    case WeededAst.Expression.Ascribe(exp, tpe, eff, loc) =>
+      visitExp(exp, env0, tenv0) map {
+        case e => NamedAst.Expression.Ascribe(e, visitType(tpe, tenv0), eff, loc)
+      }
 
-    case WeededAst.Expression.Cast(exp, tpe, eff, loc) => visitExp(exp, env0, tenv0) map {
-      case e => NamedAst.Expression.Cast(e, visitType(tpe, tenv0), eff, loc)
-    }
+    case WeededAst.Expression.Cast(exp, tpe, eff, loc) =>
+      visitExp(exp, env0, tenv0) map {
+        case e => NamedAst.Expression.Cast(e, visitType(tpe, tenv0), eff, loc)
+      }
+
+    case WeededAst.Expression.Label(name, exp, loc) =>
+      visitExp(exp, env0, tenv0) map {
+        case e => NamedAst.Expression.Label(name, e, Type.freshTypeVar(), loc)
+      }
 
     case WeededAst.Expression.TryCatch(exp, rules, loc) =>
       val expVal = visitExp(exp, env0, tenv0)
@@ -1149,6 +1156,7 @@ object Namer extends Phase[WeededAst.Program, NamedAst.Root] {
     case WeededAst.Expression.Universal(fparam, exp, loc) => filterBoundVars(freeVars(exp), List(fparam.ident))
     case WeededAst.Expression.Ascribe(exp, tpe, eff, loc) => freeVars(exp)
     case WeededAst.Expression.Cast(exp, tpe, eff, loc) => freeVars(exp)
+    case WeededAst.Expression.Label(_, exp, loc) => freeVars(exp)
     case WeededAst.Expression.TryCatch(exp, rules, loc) =>
       rules.foldLeft(freeVars(exp)) {
         case (fvs, WeededAst.CatchRule(ident, className, body)) => filterBoundVars(freeVars(body), List(ident))

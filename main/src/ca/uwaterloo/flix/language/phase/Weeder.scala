@@ -891,6 +891,13 @@ object Weeder extends Phase[ParsedAst.Program, WeededAst.Program] {
         WeededAst.Expression.Cast(e, visitType(tpe), eff, mkSL(leftMostSourcePosition(exp), sp2))
       }
 
+    case ParsedAst.Expression.Label(sp1, lab, exp, sp2) =>
+      for {
+        e <- visitExp(exp)
+      } yield {
+        WeededAst.Expression.Label(lab.name, e, mkSL(sp1, sp2))
+      }
+
     case ParsedAst.Expression.TryCatch(sp1, exp, rules, sp2) =>
       val expVal = visitExp(exp)
       val rulesVal = traverse(rules) {
@@ -1818,6 +1825,7 @@ object Weeder extends Phase[ParsedAst.Program, WeededAst.Program] {
     case ParsedAst.Expression.Universal(sp1, _, _, _) => sp1
     case ParsedAst.Expression.Ascribe(e1, _, _, _) => leftMostSourcePosition(e1)
     case ParsedAst.Expression.Cast(e1, _, _, _) => leftMostSourcePosition(e1)
+    case ParsedAst.Expression.Label(sp1, _, _, _) => sp1
     case ParsedAst.Expression.TryCatch(sp1, _, _, _) => sp1
     case ParsedAst.Expression.NativeField(sp1, _, _) => sp1
     case ParsedAst.Expression.NativeMethod(sp1, _, _, _) => sp1

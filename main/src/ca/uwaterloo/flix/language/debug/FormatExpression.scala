@@ -64,6 +64,7 @@ object FormatExpression {
     case TypedAst.Expression.Universal(fparam, exp, eff, loc) => s"Universal($fparam, $exp)"
     case TypedAst.Expression.Ascribe(exp, tpe, eff, loc) => s"Ascribe($exp, $tpe)"
     case TypedAst.Expression.Cast(exp, tpe, eff, loc) => s"Cast($exp, $tpe)"
+    case TypedAst.Expression.Label(name, exp, tpe, eff, loc) => s"Label($name, $exp, $tpe)"
     case TypedAst.Expression.NativeConstructor(constructor, args, tpe, eff, loc) => s"NativeConstructor($constructor, ${args.mkString(", ")})"
     case TypedAst.Expression.TryCatch(exp, rules, tpe, eff, loc) => s"TryCatch($exp, ${rules.mkString(", ")})"
     case TypedAst.Expression.NativeField(field, tpe, eff, loc) => s"NativeField($field)"

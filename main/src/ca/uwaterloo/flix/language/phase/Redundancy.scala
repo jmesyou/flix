@@ -498,6 +498,9 @@ object Redundancy extends Phase[TypedAst.Root, TypedAst.Root] {
     case Expression.Cast(exp, _, _, _) =>
       visitExp(exp, env0)
 
+    case Expression.Label(_, exp, _, _, _) =>
+      visitExp(exp, env0)
+
     case Expression.NativeConstructor(_, args, _, _, _) =>
       visitExps(args, env0)
 

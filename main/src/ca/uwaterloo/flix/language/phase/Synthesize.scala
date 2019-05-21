@@ -268,6 +268,10 @@ object Synthesize extends Phase[Root, Root] {
         val e = visitExp(exp)
         Expression.Cast(e, tpe, eff, loc)
 
+      case Expression.Label(name, exp, tpe, eff, loc) =>
+        val e = visitExp(exp)
+        Expression.Label(name, e, tpe, eff, loc)
+
       case Expression.TryCatch(exp, rules, tpe, eff, loc) =>
         val e = visitExp(exp)
         val rs = rules map {

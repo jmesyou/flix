@@ -383,6 +383,9 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
       case Expression.Cast(exp, _, _, _) =>
         visitExp(exp)
 
+      case Expression.Label(_, exp, _, _, _) =>
+        visitExp(exp)
+
       case Expression.NativeConstructor(_, args, _, _, _) =>
         args.foldLeft(Nil: List[TrivialError]) {
           case (acc, e) => acc ++ visitExp(e)
@@ -859,6 +862,8 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
         case Expression.Ascribe(exp, tpe, eff, loc) => ???
 
         case Expression.Cast(exp, tpe, eff, loc) => ???
+
+        case Expression.Label(name, exp, tpe, eff, loc) => ???
 
         case Expression.NativeConstructor(constructor, args, tpe, eff, loc) => ???
 

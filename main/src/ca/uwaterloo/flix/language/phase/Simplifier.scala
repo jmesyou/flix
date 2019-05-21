@@ -496,6 +496,8 @@ object Simplifier extends Phase[TypedAst.Root, SimplifiedAst.Root] {
 
       case TypedAst.Expression.Cast(exp, tpe, eff, loc) => visitExp(exp)
 
+      case TypedAst.Expression.Label(name, exp, tpe, eff, loc) => visitExp(exp)
+
       case TypedAst.Expression.TryCatch(exp, rules, tpe, eff, loc) =>
         val e = visitExp(exp)
         val rs = rules map {

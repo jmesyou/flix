@@ -1049,6 +1049,14 @@ object Typer extends Phase[ResolvedAst.Program, TypedAst.Root] {
         } yield declaredType
 
       /*
+       * Label expression.
+       */
+      case ResolvedAst.Expression.Label(name, exp, tpe, loc) =>
+        for {
+          resultType <- visitExp(exp)
+        } yield resultType
+
+      /*
        * Try Catch
        */
       case ResolvedAst.Expression.TryCatch(exp, rules, tvar, loc) =>
@@ -1649,6 +1657,13 @@ object Typer extends Phase[ResolvedAst.Program, TypedAst.Root] {
       case ResolvedAst.Expression.Cast(exp, tpe, eff, loc) =>
         val e = visitExp(exp, subst0)
         TypedAst.Expression.Cast(e, tpe, eff, loc)
+
+      /*
+       * Label expression.
+       */
+      case ResolvedAst.Expression.Label(name, exp, tvar, loc) =>
+        val e = visitExp(exp, subst0)
+        TypedAst.Expression.Label(name, e, subst0(tvar), Eff.Empty, loc)
 
       /*
        * Try Catch expression.

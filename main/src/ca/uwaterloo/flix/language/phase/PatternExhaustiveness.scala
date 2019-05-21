@@ -296,6 +296,7 @@ object PatternExhaustiveness extends Phase[TypedAst.Root, TypedAst.Root] {
         case Expression.Universal(_, exp, _, _) => checkPats(exp, root).map(const(tast))
         case Expression.Ascribe(exp, _, _, _) => checkPats(exp, root).map(const(tast))
         case Expression.Cast(exp, _, _, _) => checkPats(exp, root).map(const(tast))
+        case Expression.Label(_, exp, _, _, _) => checkPats(exp, root).map(const(tast))
         case Expression.TryCatch(exp, rules, tpe, eff, loc) =>
           for {
             _ <- checkPats(exp, root)

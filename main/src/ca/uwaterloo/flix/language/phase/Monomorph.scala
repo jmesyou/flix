@@ -401,6 +401,10 @@ object Monomorph extends Phase[TypedAst.Root, TypedAst.Root] {
           val e = visitExp(exp, env0)
           Expression.Cast(e, subst0(tpe), eff, loc)
 
+        case Expression.Label(name, exp, tpe, eff, loc) =>
+          val e = visitExp(exp, env0)
+          Expression.Label(name, e, subst0(tpe), eff, loc)
+
         case Expression.TryCatch(exp, rules, tpe, eff, loc) =>
           val e = visitExp(exp, env0)
           val rs = rules map {

@@ -673,6 +673,11 @@ object Resolver extends Phase[NamedAst.Root, ResolvedAst.Program] {
             t <- lookupType(tpe, ns0, prog0)
           } yield ResolvedAst.Expression.Cast(e, t, eff, loc)
 
+        case NamedAst.Expression.Label(name, exp, tvar, loc) =>
+          for {
+            e <- visit(exp, tenv0)
+          } yield ResolvedAst.Expression.Label(name, e, tvar, loc)
+
         case NamedAst.Expression.TryCatch(exp, rules, tpe, loc) =>
           val rulesVal = traverse(rules) {
             case NamedAst.CatchRule(sym, clazz, body) =>
