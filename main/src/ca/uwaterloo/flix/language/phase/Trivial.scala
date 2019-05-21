@@ -383,8 +383,10 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
       case Expression.Cast(exp, _, _, _) =>
         visitExp(exp)
 
-      case Expression.Label(_, exp, _, _, _) =>
-        visitExp(exp)
+      case Expression.Label(name, exp, _, _, _) => name match {
+        case "unchecked" => Nil
+        case _ => visitExp(exp)
+      }
 
       case Expression.NativeConstructor(_, args, _, _, _) =>
         args.foldLeft(Nil: List[TrivialError]) {
