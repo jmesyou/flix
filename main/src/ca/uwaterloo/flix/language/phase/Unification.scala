@@ -81,6 +81,14 @@ object Unification {
       * Returns the left-biased composition of `this` substitution with `that` substitution.
       */
     def ++(that: Substitution): Substitution = {
+      if (this eq Substitution.empty) {
+        return that
+      }
+
+      if (that eq Substitution.empty) {
+        return this
+      }
+
       Substitution(this.m ++ that.m.filter(kv => !this.m.contains(kv._1)))
     }
 
@@ -88,6 +96,14 @@ object Unification {
       * Returns the composition of `this` substitution with `that` substitution.
       */
     def @@(that: Substitution): Substitution = {
+      if (this eq Substitution.empty) {
+        return that
+      }
+
+      if (that eq Substitution.empty) {
+        return this
+      }
+
       val m = that.m.foldLeft(Map.empty[Type.Var, Type]) {
         case (macc, (x, t)) => macc.updated(x, this.apply(t))
       }

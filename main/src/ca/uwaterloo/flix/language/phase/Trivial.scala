@@ -185,10 +185,7 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
     /**
       * A list of trivial expression patterns.
       */
-    // TODO: To test performance it might be worth duplicating this list many times.
-    def allPatterns(implicit root: Root, flix: Flix): List[Expression] = availablePatterns
-
-    def availablePatterns(implicit root: Root, flix: Flix): List[Expression] = List(
+    def allPatterns(implicit root: Root, flix: Flix): List[Expression] = List(
       rightAdditionByZero(),
       leftAdditionByZero(),
       subtractionByZero(),
@@ -216,7 +213,9 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
     checkExp(defn0.exp, patterns)
   }
 
-  // TODO: DOC
+  /**
+    * Check if the given expression `exp0` contains any trivial sub-expressions.
+    */
   private def checkExp(exp0: Expression, patterns: List[Expression])(implicit root: Root, flix: Flix): List[TrivialError] = {
 
     /**
@@ -493,8 +492,9 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
     }
   }
 
-
-  // TODO: DOC
+  /**
+    * Optionally returns a substitution that unifies the two given expressions `x` and `y`.
+    */
   private def unify(x: Expression, y: Expression): Option[Substitution] = (x, y) match {
 
     case (Expression.Unit(_), Expression.Unit(_)) => Substitution.emptyOpt
@@ -697,7 +697,9 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
       */
     val emptyOpt: Option[Substitution] = Some(Substitution.empty)
 
-    // TODO: DOC
+    /**
+      * Returns a substitution that maps the given variable symbol `sym` to the given expression `exp`.
+      */
     def of(sym: Symbol.VarSym, exp: Expression): Substitution = Substitution(Map(sym -> exp))
   }
 
@@ -920,16 +922,29 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
     /**
       * Returns the left-biased composition of `this` substitution with `that` substitution.
       */
-    // TODO: Optimize for empty subst?Why not do this for other substs too?
     def ++(that: Substitution): Substitution = {
+      if (this eq Substitution.empty) {
+        return that
+      }
+
+      if (that eq Substitution.empty) {
+        return this
+      }
+
       Substitution(this.m ++ that.m.filter(kv => !this.m.contains(kv._1)))
     }
 
-    // TODO: Optimize for empty subst? Why not do this for other substs too?
     /**
       * Returns the composition of `this` substitution with `that` substitution.
       */
     def @@(that: Substitution): Substitution = {
+      if (this eq Substitution.empty) {
+        return that
+      }
+      if (that eq Substitution.empty) {
+        return this
+      }
+
       val m = that.m.foldLeft(Map.empty[Symbol.VarSym, Expression]) {
         case (macc, (x, t)) => macc.updated(x, this.apply(t))
       }
@@ -963,9 +978,6 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
 
   // TODO: !! Could this phase not run concurrently with other phases!? We should just run all such checker phase concurrent with the rest of the entire compiler.
   // TODO: We could even start codegen while this is running.
-
-  // TODO: JvmBackend should not always load classes
-  // TODO: JvmBackend should run in parallel.
 
   //
   //thm listIsEmptyCons[a](): Bool = \forall (x: a, xs: List[a]). List.isEmpty(x :: xs) ~~> false
