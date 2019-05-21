@@ -25,7 +25,6 @@ import ca.uwaterloo.flix.language.errors.TrivialError.TrivialExpression
 import ca.uwaterloo.flix.util.Validation
 import ca.uwaterloo.flix.util.Validation._
 
-// TODO: Come up with better name.
 object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
 
   def run(root: TypedAst.Root)(implicit flix: Flix): Validation[TypedAst.Root, TrivialError] = flix.phase("Trivial") {
@@ -209,6 +208,7 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
   /**
     * Finds trivial computations in the given definition `defn0`.
     */
+  // TODO: Use set instead of list of trivial errors?
   private def visitDef(defn0: Def, patterns: List[Expression])(implicit root: Root, flix: Flix): List[TrivialError] = {
     checkExp(defn0.exp, patterns)
   }
@@ -967,43 +967,23 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
   // TODOs
   /////////////////////////////////////////////////////////////////////////////
 
-  // TODO: What about whole expressions divided by themselves, e.g. (x + 1) / (x + 1)?
+  // TODO: Improve naming: (1) Trivial, (2) Patterns.
 
-  // TODO: Ensure consistent parameter names.
+  // TODO: A Catalog of patterns:
+  //  - List.isEmpty(x :: xs) ~~>
+  //  - "" + s ~~> s
+  //  - List.isEmpty(xs) => (List.filter(f, xs) ~~> Nil)
+  //  - (exp) / (exp) where the two expressions are the same.
+  //  - x != 'a' || x != 'b' for any constants 'a' and 'b'.
+  //  - List.getWithDefault(List.map(_, o), false)         --> List.exists(_)
+  //  - List.isEmpty(xs) && List.exists(_, xs)             --> false
+  //  - Option.flatMap(x => if (f(x)) Some(x) else None))  --> Option.filter(f)
+  //  - x == x or x != x which are always true/false.
 
-  // TODO: Introduce appropriate theorem type, probably something that holds a rewrite rule like:
-  // TODO:
-  // TODO: thm listIsEmptyCons[a](): Bool = \forall (x: a, xs: List[a]). List.isEmpty(x :: xs) ~~> false
-  // TODO: thm leftConcatenateEmptyString(): Bool = \forall (s: Str). "" + s ~~> s
-  // TODO: thm listFilterEmpty[a, b](): Bool = \forall (f: a -> b, xs: List[a]). List.isEmpty(xs) => (List.filter(f, xs) ~~> Nil)
-  // TODO: law reflexive[e](⊑: (e, e) -> Bool): Bool = ∀(x: e). x ⊑ x
+  // TODO: [Data Structure]: Idea for algorithms: suffix trees, nested words, etc.
 
-  // TODO: A. had some interesting patterns, e.g. x != 'a' || x != 'b'
+  // TODO: [Types]: Can we use information about types to speedup pattern matching?
 
-  // TODO: Use cases to find:
-
-  // TODO: - List.getWithDefault(List.map(_, o), false)         --> List.exists(_)
-  // TODO: - List.isEmpty(xs) && List.exists(_, xs)             --> false
-  // TODO: - Option.flatMap(x => if (f(x)) Some(x) else None))  --> Option.filter(f)
-  // TODO - x == x or equalities that are always or never true.
-
-  // TODO: !! Could this phase not run concurrently with other phases!? We should just run all such checker phase concurrent with the rest of the entire compiler.
-  // TODO: We could even start codegen while this is running.
-
-  //
-  //thm listIsEmptyCons[a](): Bool = \forall (x: a, xs: List[a]). List.isEmpty(x :: xs) ~~> false
-  //
-  //thm leftConcatenateEmptyString(): Bool = \forall (s: Str). "" + s ~~> s
-  //
-  //thm listFilterEmpty[a, b](): Bool = \forall (f: a -> b, xs: List[a]). List.isEmpty(xs) => (List.filter(f, xs) ~~> Nil)
-  //
-  //law reflexive[e](⊑: (e, e) -> Bool): Bool = ∀(x: e). x ⊑ x
-  //
-
-  // TODO: Rename patterns to something more appropriate.
-
-  // TODO: Use set instead of list of trivial errors?
-
-  // TODO: Often we should be able to use types to quickly check if a pattern is potentially relevant
+  // TODO: [Concurrency]: We should run the all the checker phases concurrently with the code generation phases.
 
 }
