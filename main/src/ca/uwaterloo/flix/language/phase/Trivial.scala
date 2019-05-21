@@ -970,8 +970,8 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
   // TODO: Improve naming: (1) Trivial, (2) Patterns.
 
   // TODO: A Catalog of patterns:
-  //  - List.isEmpty(x :: xs) ~~>
   //  - "" + s ~~> s
+  //  - List.isEmpty(x :: xs) ~~>
   //  - List.isEmpty(xs) => (List.filter(f, xs) ~~> Nil)
   //  - (exp) / (exp) where the two expressions are the same.
   //  - x != 'a' || x != 'b' for any constants 'a' and 'b'.
@@ -979,6 +979,15 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
   //  - List.isEmpty(xs) && List.exists(_, xs)             --> false
   //  - Option.flatMap(x => if (f(x)) Some(x) else None))  --> Option.filter(f)
   //  - x == x or x != x which are always true/false.
+
+  // ///
+  // /// Concatenation with the empty string.
+  // ///
+  // thm concatEmptyString(): Bool = forall(s: Str). "" + s ~~> s
+
+  // pattern("Non-empty list is never empty.")
+  // forall(x: a, xs: List[a]). List.isEmpty(x :: xs) ~~> false
+
 
   // TODO: [Data Structure]: Idea for algorithms: suffix trees, nested words, etc.
 
