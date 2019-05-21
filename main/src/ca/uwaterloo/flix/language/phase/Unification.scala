@@ -47,45 +47,51 @@ object Unification {
     /**
       * Returns `true` if `this` is the empty substitution.
       */
-    def isEmpty: Boolean = m.isEmpty
+    def isEmpty: Boolean = this eq Substitution.empty
 
     /**
       * Applies `this` substitution to the given type `tpe`.
       */
-    def apply(tpe: Type): Type = tpe match {
-      case x: Type.Var =>
-        m.get(x) match {
-          case None => x
-          case Some(y) if x.kind == tpe.kind => y
-          case Some(y) if x.kind != tpe.kind => throw InternalCompilerException(s"Expected kind `${x.kind}' but got `${tpe.kind}'.")
-        }
-      case Type.Cst(tc) => Type.Cst(tc)
-      case Type.Arrow(l) => Type.Arrow(l)
-      case Type.RecordEmpty => Type.RecordEmpty
-      case Type.RecordExtend(label, field, rest) => Type.RecordExtend(label, apply(field), apply(rest))
-      case Type.SchemaEmpty => Type.SchemaEmpty
-      case Type.SchemaExtend(sym, tpe, rest) => Type.SchemaExtend(sym, apply(tpe), apply(rest))
-      case Type.Zero => Type.Zero
-      case Type.Succ(n, t) => Type.Succ(n, apply(t))
-      case Type.Relation(sym, attr, kind) => Type.Relation(sym, attr map apply, kind)
-      case Type.Lattice(sym, attr, kind) => Type.Lattice(sym, attr map apply, kind)
-      case Type.Apply(t1, t2) => Type.Apply(apply(t1), apply(t2))
+    def apply(tpe: Type): Type = {
+      if (isEmpty) {
+        return tpe
+      }
+
+      tpe match {
+        case x: Type.Var =>
+          m.get(x) match {
+            case None => x
+            case Some(y) if x.kind == tpe.kind => y
+            case Some(y) if x.kind != tpe.kind => throw InternalCompilerException(s"Expected kind `${x.kind}' but got `${tpe.kind}'.")
+          }
+        case Type.Cst(tc) => Type.Cst(tc)
+        case Type.Arrow(l) => Type.Arrow(l)
+        case Type.RecordEmpty => Type.RecordEmpty
+        case Type.RecordExtend(label, field, rest) => Type.RecordExtend(label, apply(field), apply(rest))
+        case Type.SchemaEmpty => Type.SchemaEmpty
+        case Type.SchemaExtend(sym, tpe, rest) => Type.SchemaExtend(sym, apply(tpe), apply(rest))
+        case Type.Zero => Type.Zero
+        case Type.Succ(n, t) => Type.Succ(n, apply(t))
+        case Type.Relation(sym, attr, kind) => Type.Relation(sym, attr map apply, kind)
+        case Type.Lattice(sym, attr, kind) => Type.Lattice(sym, attr map apply, kind)
+        case Type.Apply(t1, t2) => Type.Apply(apply(t1), apply(t2))
+      }
     }
 
     /**
       * Applies `this` substitution to the given types `ts`.
       */
-    def apply(ts: List[Type]): List[Type] = ts map apply
+    def apply(ts: List[Type]): List[Type] = if (isEmpty) ts else ts.map(apply)
 
     /**
       * Returns the left-biased composition of `this` substitution with `that` substitution.
       */
     def ++(that: Substitution): Substitution = {
-      if (this eq Substitution.empty) {
+      if (this.isEmpty) {
         return that
       }
 
-      if (that eq Substitution.empty) {
+      if (that.isEmpty) {
         return this
       }
 
@@ -96,11 +102,11 @@ object Unification {
       * Returns the composition of `this` substitution with `that` substitution.
       */
     def @@(that: Substitution): Substitution = {
-      if (this eq Substitution.empty) {
+      if (this.isEmpty) {
         return that
       }
 
-      if (that eq Substitution.empty) {
+      if (that.isEmpty) {
         return this
       }
 

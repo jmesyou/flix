@@ -709,9 +709,18 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
   private case class Substitution(m: Map[Symbol.VarSym, Expression]) {
 
     /**
+      * Returns `true` if `this` substitution is empty.
+      */
+    def isEmpty: Boolean = this eq Substitution.empty
+
+    /**
       * Applies `this` substitution to the given expression `exp0`.
       */
     def apply(exp0: Expression): Expression = {
+      if (isEmpty) {
+        return exp0
+      }
+
       /**
         * Applies the substitution to the expression `e0`.
         */
@@ -917,17 +926,18 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
     /**
       * Applies `this` substitution to the given expressions `es`.
       */
-    def apply(es: List[Expression]): List[Expression] = es map apply
+    def apply(es: List[Expression]): List[Expression] =
+      if (isEmpty) es else es map apply
 
     /**
       * Returns the left-biased composition of `this` substitution with `that` substitution.
       */
     def ++(that: Substitution): Substitution = {
-      if (this eq Substitution.empty) {
+      if (this.isEmpty) {
         return that
       }
 
-      if (that eq Substitution.empty) {
+      if (that.isEmpty) {
         return this
       }
 
@@ -938,10 +948,11 @@ object Trivial extends Phase[TypedAst.Root, TypedAst.Root] {
       * Returns the composition of `this` substitution with `that` substitution.
       */
     def @@(that: Substitution): Substitution = {
-      if (this eq Substitution.empty) {
+      if (this.isEmpty) {
         return that
       }
-      if (that eq Substitution.empty) {
+
+      if (that.isEmpty) {
         return this
       }
 
