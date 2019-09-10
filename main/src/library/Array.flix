@@ -49,6 +49,22 @@ namespace Array {
     ///
     pub def slice(a: Array[a], b: Int, e: Int): Array[a] = a[b..e]
 
+    pub def map(f: a -> b, a: Array[a]): Array[b] = mapHelper(f, 0, a)
+
+    def mapHelper(f: a -> b, i: Int, a: Array[a]): Array[b] = 
+        if (i == length(a))
+            a 
+        else 
+            mapHelper(f, i + 1, a.put(i, f(a[i])))
+
+    pub def foldLeft(acc: b, f: b -> a -> b, a: Array[a]): b = foldLeftHelper(acc, f, 0, a)
+
+    def foldLeftHelper(acc: b, f: b -> a -> b, i: Int, a: Array[a]): b = 
+        if (i == length(a))
+            acc 
+        else 
+            foldLeftHelper(f, f(acc, a[i]), i + 1, a)
+
     ///
     /// Returns the array `a` as a list.
     ///
