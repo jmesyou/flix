@@ -49,6 +49,22 @@ namespace Array {
     ///
     pub def slice(a: Array[a], b: Int, e: Int): Array[a] = a[b..e]
 
+    pub def append(a: Array[a], b: Array[a]): Array[a] = 
+    if (length(a) == 0)
+        b 
+    else if (length(b) == 0)
+        a
+    else 
+        sliceAssign(a, b, 0, appendHelper(a, 0, 0, new(a[0], length(a) + length(b)))
+
+    pub def sliceAssign(a: Array[a], b: Array[a], start: Int, end: Int): Array[a] = sliceAssignHelper(a, b, start, end, 0)
+
+    def sliceAssignHelper(a: Array[a], b: Array[a], start: Int, end: Int, i: Int): Array[a] = 
+        if (start == end)
+            a 
+        else 
+            sliceAssign(a.put(start, b[i]), b, start + 1, end, i + 1)
+
     pub def map(f: a -> b, a: Array[a]): Array[b] = mapHelper(f, 0, a)
 
     def mapHelper(f: a -> b, i: Int, a: Array[a]): Array[b] = 
