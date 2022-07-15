@@ -1,6 +1,6 @@
 /// Declare two predicate symbols.
-rel ParentOf(x: Str, y: Str)
-rel AncestorOf(x: Str, y: Str)
+rel ParentOf(x: String, y: String)
+rel AncestorOf(x: String, y: String)
 
 /// Returns a collection of facts.
 def getFacts(): #{ ParentOf, AncestorOf } = #{
@@ -17,5 +17,6 @@ def getRules(): #{ ParentOf, AncestorOf } = #{
 }
 
 /// Composes the facts and rules, and computes the lfp.
-def main(): #{ ParentOf, AncestorOf } =
-    solve getFacts() <+> getRules()
+def main(): Unit & Impure =
+    query getFacts(), getRules()
+        select (x, y) from AncestorOf(x, y) |> println

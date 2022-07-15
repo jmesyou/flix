@@ -16,11 +16,10 @@
 
 package ca.uwaterloo.flix.util
 
-import org.scalatest.{ParallelTestExecution, Suites}
+import org.scalatest.Suites
 
 class UtilSuite extends Suites(
+  new TestGraph,
   new TestResult,
   new TestValidation
-) with ParallelTestExecution {
-  /* left empty */
-}
+)

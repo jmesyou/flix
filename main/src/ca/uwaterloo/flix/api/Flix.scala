@@ -16,24 +16,27 @@
 
 package ca.uwaterloo.flix.api
 
-import java.nio.charset.Charset
-import java.nio.file.{Files, Path, Paths}
-import java.util.concurrent.{ExecutorService, Executors}
-
 import ca.uwaterloo.flix.language.ast.Ast.Input
 import ca.uwaterloo.flix.language.ast._
 import ca.uwaterloo.flix.language.phase._
 import ca.uwaterloo.flix.language.phase.jvm.JvmBackend
-import ca.uwaterloo.flix.language.{CompilationError, GenSym}
-import ca.uwaterloo.flix.runtime.quickchecker.QuickChecker
-import ca.uwaterloo.flix.runtime.verifier.Verifier
+import ca.uwaterloo.flix.language.{CompilationMessage, GenSym}
 import ca.uwaterloo.flix.runtime.CompilationResult
+import ca.uwaterloo.flix.util.Formatter.NoFormatter
 import ca.uwaterloo.flix.util._
-import ca.uwaterloo.flix.util.vt.TerminalContext
 
+import java.net.URI
+import java.nio.charset.Charset
+import java.nio.file.{Files, Path, Paths}
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.ExecutionContext
+
+object Flix {
+  /**
+    * The reserved Flix delimiter.
+    */
+  val Delimiter: String = "%"
+}
 
 /**
   * Main programmatic interface for Flix.
@@ -41,81 +44,189 @@ import scala.concurrent.ExecutionContext
 class Flix {
 
   /**
-    * A sequence of strings to parsed into Flix ASTs.
+    * A sequence of inputs to be parsed into Flix ASTs.
     */
-  private val strings = ListBuffer.empty[String]
+  private val inputs = mutable.Map.empty[String, Input]
 
   /**
-    * A sequence of paths to be parsed into Flix ASTs.
+    * The set of sources changed since last compilation.
     */
-  private val paths = ListBuffer.empty[Path]
+  private var changeSet: ChangeSet = ChangeSet.Everything
 
   /**
-    * A map of named expressions.
+    * A cache of compiled ASTs (for incremental compilation).
     */
-  private val named = mutable.Map.empty[Symbol.DefnSym, String]
-
-  /**
-    * A set of reachable root definitions.
-    */
-  private val reachableRoots = mutable.Set.empty[Symbol.DefnSym]
+  private var cachedParsedAst: ParsedAst.Root = ParsedAst.Root(Map.empty, None)
+  private var cachedWeededAst: WeededAst.Root = WeededAst.Root(Map.empty, None)
+  private var cachedKindedAst: KindedAst.Root = KindedAst.Root(Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, None, Map.empty)
+  private var cachedResolvedAst: ResolvedAst.Root = ResolvedAst.Root(Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, List.empty, None, Map.empty)
+  private var cachedTypedAst: TypedAst.Root = TypedAst.Root(Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, Map.empty, None, Map.empty, Map.empty)
 
   /**
     * A sequence of internal inputs to be parsed into Flix ASTs.
+    *
+    * The core library *must* be present for any program to compile.
     */
-  private val library = List(
-    "Array.flix" -> LocalResource.get("/library/Array.flix"),
-    "BigInt.flix" -> LocalResource.get("/library/BigInt.flix"),
-    "Char.flix" -> LocalResource.get("/library/Char.flix"),
-    "Console.flix" -> LocalResource.get("/library/Console.flix"),
-    "Float32.flix" -> LocalResource.get("/library/Float32.flix"),
-    "Float64.flix" -> LocalResource.get("/library/Float64.flix"),
-    "Int8.flix" -> LocalResource.get("/library/Int8.flix"),
-    "Int16.flix" -> LocalResource.get("/library/Int16.flix"),
-    "Int32.flix" -> LocalResource.get("/library/Int32.flix"),
-    "Int64.flix" -> LocalResource.get("/library/Int64.flix"),
-    "List.flix" -> LocalResource.get("/library/List.flix"),
-    "Map.flix" -> LocalResource.get("/library/Map.flix"),
-    "Option.flix" -> LocalResource.get("/library/Option.flix"),
-    "Path.flix" -> LocalResource.get("/library/Path.flix"),
-    "Prelude.flix" -> LocalResource.get("/library/Prelude.flix"),
-    "Random.flix" -> LocalResource.get("/library/Random.flix"),
-    "Result.flix" -> LocalResource.get("/library/Result.flix"),
-    "Set.flix" -> LocalResource.get("/library/Set.flix"),
-    "String.flix" -> LocalResource.get("/library/String.flix"),
+  private val coreLibrary = List(
+    // Prelude
+    "Prelude.flix" -> LocalResource.get("/src/library/Prelude.flix"),
 
-    "Bounded.flix" -> LocalResource.get("/library/Bounded.flix"),
-    "JoinLattice.flix" -> LocalResource.get("/library/JoinLattice.flix"),
-    "MeetLattice.flix" -> LocalResource.get("/library/MeetLattice.flix"),
-    "PartialOrder.flix" -> LocalResource.get("/library/PartialOrder.flix"),
-    "Tuple.flix" -> LocalResource.get("/library/Tuple.flix"),
-    "TotalOrder.flix" -> LocalResource.get("/library/TotalOrder.flix"),
+    // Comparison
+    "Comparison.flix" -> LocalResource.get("/src/library/Comparison.flix"),
 
-    "flix/channel/Channel.flix" -> LocalResource.get("/library/flix/channel/Channel.flix"),
-    "flix/channel/Ticker.flix" -> LocalResource.get("/library/flix/channel/Ticker.flix"),
-    "flix/channel/Timer.flix" -> LocalResource.get("/library/flix/channel/Timer.flix"),
-    "flix/time/Duration.flix" -> LocalResource.get("/library/flix/time/Duration.flix"),
+    // Operators
+    "Neg.flix" -> LocalResource.get("/src/library/Neg.flix"),
+    "Add.flix" -> LocalResource.get("/src/library/Add.flix"),
+    "Sub.flix" -> LocalResource.get("/src/library/Sub.flix"),
+    "Mul.flix" -> LocalResource.get("/src/library/Mul.flix"),
+    "Div.flix" -> LocalResource.get("/src/library/Div.flix"),
+    "Rem.flix" -> LocalResource.get("/src/library/Rem.flix"),
+    "Mod.flix" -> LocalResource.get("/src/library/Mod.flix"),
+    "Exp.flix" -> LocalResource.get("/src/library/Exp.flix"),
+    "BitwiseNot.flix" -> LocalResource.get("/src/library/BitwiseNot.flix"),
+    "BitwiseAnd.flix" -> LocalResource.get("/src/library/BitwiseAnd.flix"),
+    "BitwiseOr.flix" -> LocalResource.get("/src/library/BitwiseOr.flix"),
+    "BitwiseXor.flix" -> LocalResource.get("/src/library/BitwiseXor.flix"),
+    "BitwiseShl.flix" -> LocalResource.get("/src/library/BitwiseShl.flix"),
+    "BitwiseShr.flix" -> LocalResource.get("/src/library/BitwiseShr.flix"),
+    "Bool.flix" -> LocalResource.get("/src/library/Bool.flix"),
 
-    //"flix/core/Functor.flix" -> LocalResource.get("/library/flix/core/Functor.flix"),
-    //"flix/core/cmp/package.flix" -> LocalResource.get("/library/flix/core/cmp/package.flix"),
-    //"flix/core/cmp/Eq.flix" -> LocalResource.get("/library/flix/core/cmp/Eq.flix"),
-    //"flix/core/cmp/Ord.flix" -> LocalResource.get("/library/flix/core/cmp/Ord.flix"),
-    //"flix/core/cmp/PartialEq.flix" -> LocalResource.get("/library/flix/core/cmp/PartialEq.flix"),
-    //"flix/core/cmp/PartialOrd.flix" -> LocalResource.get("/library/flix/core/cmp/PartialOrd.flix"),
-    //"flix/core/lattice/JoinSemiLattice.flix" -> LocalResource.get("/library/flix/core/lattice/JoinSemiLattice.flix"),
-    //"flix/io/BufferedReader.flix" -> LocalResource.get("/library/flix/io/BufferedReader.flix"),
-    //"flix/io/BufferedWriter.flix" -> LocalResource.get("/library/flix/io/BufferedWriter.flix"),
-    //"flix/io/InputStream.flix" -> LocalResource.get("/library/flix/io/InputStream.flix"),
-    //"flix/io/OpenOption.flix" -> LocalResource.get("/library/flix/io/OpenOption.flix"),
-    //"flix/io/OutputStream.flix" -> LocalResource.get("/library/flix/io/OutputStream.flix"),
-    //"flix/io/Path.flix" -> LocalResource.get("/library/flix/io/Path.flix"),
+    // Built-in
+    "Eq.flix" -> LocalResource.get("/src/library/Eq.flix"),
+    "Hash.flix" -> LocalResource.get("/src/library/Hash.flix"),
+    "Order.flix" -> LocalResource.get("/src/library/Order.flix"),
 
+    // Lattices
+    "PartialOrder.flix" -> LocalResource.get("/src/library/PartialOrder.flix"),
+    "LowerBound.flix" -> LocalResource.get("/src/library/LowerBound.flix"),
+    "UpperBound.flix" -> LocalResource.get("/src/library/UpperBound.flix"),
+    "JoinLattice.flix" -> LocalResource.get("/src/library/JoinLattice.flix"),
+    "MeetLattice.flix" -> LocalResource.get("/src/library/MeetLattice.flix"),
+
+    // String
+    "ToString.flix" -> LocalResource.get("/src/library/ToString.flix"),
+
+    // Boxable
+    "Boxable.flix" -> LocalResource.get("/src/library/Boxable.flix"),
+    "Boxed.flix" -> LocalResource.get("/src/library/Boxed.flix"),
   )
 
   /**
-    * A case class to track the compile time spent in a phase and its sub-phases.
+    * A sequence of internal inputs to be parsed into Flix ASTs.
+    *
+    * The standard library is not required to be present for at least some programs to compile.
     */
-  case class PhaseTime(phase: String, time: Long, subphases: List[(String, Long)])
+  private val standardLibrary = List(
+    "Array.flix" -> LocalResource.get("/src/library/Array.flix"),
+    "Benchmark.flix" -> LocalResource.get("/src/library/Benchmark.flix"),
+    "BigInt.flix" -> LocalResource.get("/src/library/BigInt.flix"),
+    "Chain.flix" -> LocalResource.get("/src/library/Chain.flix"),
+    "Char.flix" -> LocalResource.get("/src/library/Char.flix"),
+    "Choice.flix" -> LocalResource.get("/src/library/Choice.flix"),
+    "Console.flix" -> LocalResource.get("/src/library/Console.flix"),
+    "DelayList.flix" -> LocalResource.get("/src/library/DelayList.flix"),
+    "DelayMap.flix" -> LocalResource.get("/src/library/DelayMap.flix"),
+    "Float32.flix" -> LocalResource.get("/src/library/Float32.flix"),
+    "Float64.flix" -> LocalResource.get("/src/library/Float64.flix"),
+    "Int8.flix" -> LocalResource.get("/src/library/Int8.flix"),
+    "Int16.flix" -> LocalResource.get("/src/library/Int16.flix"),
+    "Int32.flix" -> LocalResource.get("/src/library/Int32.flix"),
+    "Int64.flix" -> LocalResource.get("/src/library/Int64.flix"),
+    "Iterable.flix" -> LocalResource.get("/src/library/Iterable.flix"),
+    "Iterator.flix" -> LocalResource.get("/src/library/Iterator.flix"),
+    "List.flix" -> LocalResource.get("/src/library/List.flix"),
+    "Map.flix" -> LocalResource.get("/src/library/Map.flix"),
+    "Nec.flix" -> LocalResource.get("/src/library/Nec.flix"),
+    "Nel.flix" -> LocalResource.get("/src/library/Nel.flix"),
+    "Newable.flix" -> LocalResource.get("/src/library/Newable.flix"),
+    "Object.flix" -> LocalResource.get("/src/library/Object.flix"),
+    "Option.flix" -> LocalResource.get("/src/library/Option.flix"),
+    "Random.flix" -> LocalResource.get("/src/library/Random.flix"),
+    "Result.flix" -> LocalResource.get("/src/library/Result.flix"),
+    "Scoped.flix" -> LocalResource.get("/src/library/Scoped.flix"),
+    "Set.flix" -> LocalResource.get("/src/library/Set.flix"),
+    "String.flix" -> LocalResource.get("/src/library/String.flix"),
+    "System.flix" -> LocalResource.get("/src/library/System.flix"),
+    "MultiMap.flix" -> LocalResource.get("/src/library/MultiMap.flix"),
+
+    "MutDeque.flix" -> LocalResource.get("/src/library/MutDeque.flix"),
+    "MutList.flix" -> LocalResource.get("/src/library/MutList.flix"),
+    "MutSet.flix" -> LocalResource.get("/src/library/MutSet.flix"),
+    "MutMap.flix" -> LocalResource.get("/src/library/MutMap.flix"),
+
+    "File.flix" -> LocalResource.get("/src/library/File.flix"),
+
+    "Environment.flix" -> LocalResource.get("/src/library/Environment.flix"),
+
+    "Applicative.flix" -> LocalResource.get("/src/library/Applicative.flix"),
+    "CommutativeGroup.flix" -> LocalResource.get("/src/library/CommutativeGroup.flix"),
+    "CommutativeMonoid.flix" -> LocalResource.get("/src/library/CommutativeMonoid.flix"),
+    "CommutativeSemiGroup.flix" -> LocalResource.get("/src/library/CommutativeSemiGroup.flix"),
+    "Foldable.flix" -> LocalResource.get("/src/library/Foldable.flix"),
+    "FromString.flix" -> LocalResource.get("/src/library/FromString.flix"),
+    "Functor.flix" -> LocalResource.get("/src/library/Functor.flix"),
+    "FunctorFilter.flix" -> LocalResource.get("/src/library/FunctorFilter.flix"),
+    "Group.flix" -> LocalResource.get("/src/library/Group.flix"),
+    "Identity.flix" -> LocalResource.get("/src/library/Identity.flix"),
+    "Monad.flix" -> LocalResource.get("/src/library/Monad.flix"),
+    "MonadZero.flix" -> LocalResource.get("/src/library/MonadZero.flix"),
+    "Monoid.flix" -> LocalResource.get("/src/library/Monoid.flix"),
+    "Reducible.flix" -> LocalResource.get("/src/library/Reducible.flix"),
+    "SemiGroup.flix" -> LocalResource.get("/src/library/SemiGroup.flix"),
+    "Traversable.flix" -> LocalResource.get("/src/library/Traversable.flix"),
+    "UnorderedFoldable.flix" -> LocalResource.get("/src/library/UnorderedFoldable.flix"),
+
+    "Validation.flix" -> LocalResource.get("/src/library/Validation.flix"),
+
+    "StringBuilder.flix" -> LocalResource.get("/src/library/StringBuilder.flix"),
+    "RedBlackTree.flix" -> LocalResource.get("/src/library/RedBlackTree.flix"),
+    "GetOpt.flix" -> LocalResource.get("/src/library/GetOpt.flix"),
+
+    "Concurrent/Channel.flix" -> LocalResource.get("/src/library/Concurrent/Channel.flix"),
+    "Concurrent/Condition.flix" -> LocalResource.get("/src/library/Concurrent/Condition.flix"),
+    "Concurrent/ReentrantLock.flix" -> LocalResource.get("/src/library/Concurrent/ReentrantLock.flix"),
+    "Concurrent/Channel/Ticker.flix" -> LocalResource.get("/src/library/Concurrent/Channel/Ticker.flix"),
+    "Concurrent/Channel/Timer.flix" -> LocalResource.get("/src/library/Concurrent/Channel/Timer.flix"),
+
+    "Time/Duration.flix" -> LocalResource.get("/src/library/Time/Duration.flix"),
+    "Time/Epoch.flix" -> LocalResource.get("/src/library/Time/Epoch.flix"),
+    "Time/Instant.flix" -> LocalResource.get("/src/library/Time/Instant.flix"),
+
+    "Fixpoint/Compiler.flix" -> LocalResource.get("/src/library/Fixpoint/Compiler.flix"),
+    "Fixpoint/Debugging.flix" -> LocalResource.get("/src/library/Fixpoint/Debugging.flix"),
+    "Fixpoint/IndexSelection.flix" -> LocalResource.get("/src/library/Fixpoint/IndexSelection.flix"),
+    "Fixpoint/Interpreter.flix" -> LocalResource.get("/src/library/Fixpoint/Interpreter.flix"),
+    "Fixpoint/Options.flix" -> LocalResource.get("/src/library/Fixpoint/Options.flix"),
+    "Fixpoint/PredSymsOf.flix" -> LocalResource.get("/src/library/Fixpoint/PredSymsOf.flix"),
+    "Fixpoint/Simplifier.flix" -> LocalResource.get("/src/library/Fixpoint/Simplifier.flix"),
+    "Fixpoint/Solver.flix" -> LocalResource.get("/src/library/Fixpoint/Solver.flix"),
+    "Fixpoint/Stratifier.flix" -> LocalResource.get("/src/library/Fixpoint/Stratifier.flix"),
+    "Fixpoint/SubstitutePredSym.flix" -> LocalResource.get("/src/library/Fixpoint/SubstitutePredSym.flix"),
+    "Fixpoint/VarsToIndices.flix" -> LocalResource.get("/src/library/Fixpoint/VarsToIndices.flix"),
+
+    "Fixpoint/Ast/BodyPredicate.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/BodyPredicate.flix"),
+    "Fixpoint/Ast/BodyTerm.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/BodyTerm.flix"),
+    "Fixpoint/Ast/Constraint.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/Constraint.flix"),
+    "Fixpoint/Ast/Datalog.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/Datalog.flix"),
+    "Fixpoint/Ast/Denotation.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/Denotation.flix"),
+    "Fixpoint/Ast/Fixity.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/Fixity.flix"),
+    "Fixpoint/Ast/HeadPredicate.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/HeadPredicate.flix"),
+    "Fixpoint/Ast/HeadTerm.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/HeadTerm.flix"),
+    "Fixpoint/Ast/Polarity.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/Polarity.flix"),
+    "Fixpoint/Ast/PrecedenceGraph.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/PrecedenceGraph.flix"),
+    "Fixpoint/Ast/VarSym.flix" -> LocalResource.get("/src/library/Fixpoint/Ast/VarSym.flix"),
+
+    "Fixpoint/Ram/BoolExp.flix" -> LocalResource.get("/src/library/Fixpoint/Ram/BoolExp.flix"),
+    "Fixpoint/Ram/RamStmt.flix" -> LocalResource.get("/src/library/Fixpoint/Ram/RamStmt.flix"),
+    "Fixpoint/Ram/RamSym.flix" -> LocalResource.get("/src/library/Fixpoint/Ram/RamSym.flix"),
+    "Fixpoint/Ram/RamTerm.flix" -> LocalResource.get("/src/library/Fixpoint/Ram/RamTerm.flix"),
+    "Fixpoint/Ram/RelOp.flix" -> LocalResource.get("/src/library/Fixpoint/Ram/RelOp.flix"),
+    "Fixpoint/Ram/RowVar.flix" -> LocalResource.get("/src/library/Fixpoint/Ram/RowVar.flix"),
+
+    "Fixpoint/Shared/PredSym.flix" -> LocalResource.get("/src/library/Fixpoint/Shared/PredSym.flix"),
+
+    "Graph.flix" -> LocalResource.get("/src/library/Graph.flix"),
+  )
 
   /**
     * A map to track the time spent in each phase and sub-phase.
@@ -128,6 +239,11 @@ class Flix {
   var currentPhase: PhaseTime = _
 
   /**
+    * The progress bar.
+    */
+  val progressBar: ProgressBar = new ProgressBar
+
+  /**
     * The default assumed charset.
     */
   val defaultCharset: Charset = Charset.forName("UTF-8")
@@ -138,9 +254,14 @@ class Flix {
   var options: Options = Options.Default
 
   /**
-    * The execution context for `this` Flix instance.
+    * The fork join pool for `this` Flix instance.
     */
-  var ec: ExecutionContext = mkExecutionContext(threads = 1)
+  var forkJoinPool: java.util.concurrent.ForkJoinPool = _
+
+  /**
+    * The fork join task support for `this` Flix instance.
+    */
+  var forkJoinTaskSupport: scala.collection.parallel.ForkJoinTaskSupport = _
 
   /**
     * The symbol generator associated with this Flix instance.
@@ -148,60 +269,141 @@ class Flix {
   val genSym = new GenSym()
 
   /**
+    * The default output formatter.
+    */
+  private var formatter: Formatter = NoFormatter
+
+  /**
+    * A class loader for loading external JARs.
+    */
+  val jarLoader = new ExternalJarLoader
+
+  /**
     * Adds the given string `s` to the list of strings to be parsed.
     */
-  def addStr(s: String): Flix = {
-    if (s == null)
-      throw new IllegalArgumentException("'s' must be non-null.")
-    strings += s
+  def addSourceCode(s: String): Flix = {
+    addSourceCode("<unnamed>", s)
+  }
+
+  /**
+    * Adds the given string `text` with the given `name`.
+    */
+  def addSourceCode(name: String, text: String): Flix = {
+    if (name == null)
+      throw new IllegalArgumentException("'name' must be non-null.")
+    if (text == null)
+      throw new IllegalArgumentException("'text' must be non-null.")
+    addInput(name, Input.Text(name, text, stable = false))
+    this
+  }
+
+  /**
+    * Removes the source code with the given `name`.
+    */
+  def remSourceCode(name: String): Flix = {
+    if (name == null)
+      throw new IllegalArgumentException("'name' must be non-null.")
+    remInput(name, Input.Text(name, "", stable = false))
     this
   }
 
   /**
     * Adds the given path `p` to the list of paths to be parsed.
     */
-  def addPath(p: String): Flix = {
+  def addSourcePath(p: String): Flix = {
     if (p == null)
       throw new IllegalArgumentException("'p' must be non-null.")
-    paths += Paths.get(p)
+    addSourcePath(Paths.get(p))
     this
   }
 
   /**
     * Adds the given path `p` to the list of paths to be parsed.
     */
-  def addPath(p: Path): Flix = {
+  def addSourcePath(p: Path): Flix = {
     if (p == null)
-      throw new IllegalArgumentException("'p' must be non-null.")
+      throw new IllegalArgumentException(s"'p' must be non-null.")
     if (!Files.exists(p))
-      throw new IllegalArgumentException("'p' must a file.")
+      throw new IllegalArgumentException(s"'$p' must be a file.")
     if (!Files.isRegularFile(p))
-      throw new IllegalArgumentException("'p' must a regular file.")
+      throw new IllegalArgumentException(s"'$p' must be a regular file.")
     if (!Files.isReadable(p))
-      throw new IllegalArgumentException("'p' must a readable file.")
+      throw new IllegalArgumentException(s"'$p' must be a readable file.")
 
-    paths += p
+    if (p.getFileName.toString.endsWith(".flix")) {
+      addInput(p.toString, Input.TxtFile(p))
+    } else if (p.getFileName.toString.endsWith(".fpkg")) {
+      addInput(p.toString, Input.PkgFile(p))
+    } else {
+      throw new IllegalStateException(s"Unknown file type '${p.getFileName}'.")
+    }
+
     this
   }
 
   /**
-    * Adds the given expression `exp` with the given name `sym`.
+    * Removes the given path `p` to the list of paths to be parsed.
     */
-  def addNamedExp(sym: Symbol.DefnSym, exp: String): scala.Unit = {
-    named += (sym -> exp)
+  def remSourcePath(p: Path): Flix = {
+    if (p.getFileName.toString.endsWith(".flix")) {
+      remInput(p.toString, Input.TxtFile(p))
+    } else if (p.getFileName.toString.endsWith(".fpkg")) {
+      remInput(p.toString, Input.PkgFile(p))
+    } else {
+      throw new IllegalStateException(s"Unknown file type '${p.getFileName}'.")
+    }
+
+    this
   }
 
   /**
-    * Adds the given fully-qualified name as a reachable root.
+    * Adds the given `input` under the given `name`.
     */
-  def addReachableRoot(fqn: String): scala.Unit = {
-    reachableRoots += Symbol.mkDefnSym(fqn)
+  private def addInput(name: String, input: Input): Unit = inputs.get(name) match {
+    case None =>
+      inputs += name -> input
+    case Some(_) =>
+      changeSet = changeSet.markChanged(input)
+      inputs += name -> input
   }
 
   /**
-    * Returns the reachable root definitions.
+    * Removes the given `input` under the given `name`.
+    *
+    * Note: Removing an input means to replace it by the empty string.
     */
-  def getReachableRoots: Set[Symbol.DefnSym] = reachableRoots.toSet
+  private def remInput(name: String, input: Input): Unit = inputs.get(name) match {
+    case None => // nop
+    case Some(_) =>
+      changeSet = changeSet.markChanged(input)
+      inputs += name -> Input.Text(name, "", stable = false)
+  }
+
+  /**
+    * Adds the JAR file at path `p` to the class loader.
+    */
+  def addJar(p: String): Flix = {
+    val uri = new URI(p)
+    val path = Path.of(uri)
+    addJar(path)
+  }
+
+  /**
+    * Adds the JAR file at path `p` to the class loader.
+    */
+  def addJar(p: Path): Flix = {
+    if (p == null)
+      throw new IllegalArgumentException(s"'p' must be non-null.")
+    if (!Files.exists(p))
+      throw new IllegalArgumentException(s"'$p' must be a file.")
+    if (!Files.isRegularFile(p))
+      throw new IllegalArgumentException(s"'$p' must be a regular file.")
+    if (!Files.isReadable(p))
+      throw new IllegalArgumentException(s"'$p' must be a readable file.")
+
+    jarLoader.addURL(p.toUri.toURL)
+    this
+  }
 
   /**
     * Sets the options used for this Flix instance.
@@ -209,70 +411,142 @@ class Flix {
   def setOptions(opts: Options): Flix = {
     if (opts == null)
       throw new IllegalArgumentException("'opts' must be non-null.")
-    ec = mkExecutionContext(threads = opts.threads)
     options = opts
     this
   }
 
   /**
+    * Returns the current formatter instance.
+    */
+  def getFormatter: Formatter = this.formatter
+
+  /**
+    * Sets the output formatter used for this Flix instance.
+    */
+  def setFormatter(formatter: Formatter): Flix = {
+    if (formatter == null)
+      throw new IllegalArgumentException("'formatter' must be non-null.")
+    this.formatter = formatter
+    this
+  }
+
+  /**
+    * Converts a list of compiler error messages to a list of printable messages.
+    * Decides whether or not to print the explanation.
+    */
+  def mkMessages(errors: Seq[CompilationMessage]): List[String] = {
+    if (options.explain || errors.length == 1)
+      errors.sortBy(_.loc).map(cm => cm.message(formatter) + cm.explain(formatter).getOrElse("")).toList
+    else
+      errors.sortBy(_.loc).map(cm => cm.message(formatter)).toList
+  }
+
+  /**
     * Compiles the Flix program and returns a typed ast.
     */
-  def check(): Validation[TypedAst.Root, CompilationError] = {
+  def check(): Validation[TypedAst.Root, CompilationMessage] = try {
+    // Mark this object as implicit.
+    implicit val flix: Flix = this
+
+    // Initialize fork join pool.
+    initForkJoin()
+
     // Reset the phase information.
     phaseTimers = ListBuffer.empty
 
-    // Construct the compiler pipeline.
-    val pipeline =
-      Reader |>
-        Parser |>
-        Weeder |>
-        Namer |>
-        Resolver |>
-        Typer |>
-        Stratifier |>
-        PatternExhaustiveness |>
-        Redundancy |>
-        Trivial |>
-        Safety
+    // The default entry point
+    val entryPoint = flix.options.entryPoint
 
-    // Apply the pipeline to the parsed AST.
-    pipeline.run((getInputs, named.toMap))(this)
-  }
-
-  /**
-    * Compiles the given typed ast to an executable ast.
-    */
-  def codeGen(typedAst: TypedAst.Root): Validation[CompilationResult, CompilationError] = {
-    // Construct the compiler pipeline.
-    val pipeline = Documentor |>
-      Monomorph |>
-      Synthesize |>
-      Simplifier |>
-      Uncurrier |>
-      ClosureConv |>
-      LambdaLift |>
-      Tailrec |>
-      Inliner |>
-      Optimizer |>
-      TreeShaker |>
-      VarNumbering |>
-      Finalize |>
-      QuickChecker |>
-      Verifier |>
-      JvmBackend |>
-      Finish
-
-    // Apply the pipeline to the parsed AST.
-    pipeline.run(typedAst)(this)
-  }
-
-  /**
-    * Compiles the given typed ast to an executable ast.
-    */
-  def compile(): Validation[CompilationResult, CompilationError] =
-    check() flatMap {
-      case typedAst => codeGen(typedAst)
+    // The compiler pipeline.
+    val result = for {
+      afterReader <- Reader.run(getInputs)
+      afterParser <- Parser.run(afterReader, entryPoint, cachedParsedAst, changeSet)
+      afterWeeder <- Weeder.run(afterParser, cachedWeededAst, changeSet)
+      afterNamer <- Namer.run(afterWeeder)
+      afterResolver <- Resolver.run(afterNamer, cachedResolvedAst, changeSet)
+      afterKinder <- Kinder.run(afterResolver, cachedKindedAst, changeSet)
+      afterDeriver <- Deriver.run(afterKinder)
+      afterTyper <- Typer.run(afterDeriver, cachedTypedAst, changeSet)
+      afterEntryPoint <- EntryPoint.run(afterTyper)
+      afterStatistics <- Statistics.run(afterEntryPoint)
+      afterInstances <- Instances.run(afterStatistics)
+      afterStratifier <- Stratifier.run(afterInstances)
+      afterRegions <- Regions.run(afterStratifier)
+      afterPatternExhaustiveness <- PatternExhaustiveness.run(afterRegions)
+      afterRedundancy <- Redundancy.run(afterPatternExhaustiveness)
+      afterSafety <- Safety.run(afterRedundancy)
+    } yield {
+      // Update caches for incremental compilation.
+      if (options.incremental) {
+        this.cachedParsedAst = afterParser
+        this.cachedWeededAst = afterWeeder
+        this.cachedKindedAst = afterKinder
+        this.cachedResolvedAst = afterResolver
+        this.cachedTypedAst = afterTyper
+      }
+      afterSafety
     }
+
+    // Shutdown fork join pool.
+    shutdownForkJoin()
+
+    // Reset the progress bar.
+    progressBar.complete()
+
+    // Return the result.
+    result
+  } catch {
+    case ex: InternalCompilerException =>
+      CrashHandler.handleCrash(ex)(this)
+      throw ex
+  }
+
+  /**
+    * Compiles the given typed ast to an executable ast.
+    */
+  def codeGen(typedAst: TypedAst.Root): Validation[CompilationResult, CompilationMessage] = try {
+    // Mark this object as implicit.
+    implicit val flix: Flix = this
+
+    // Initialize fork join pool.
+    initForkJoin()
+
+    val result = for {
+      afterDocumentor <- Documentor.run(typedAst)
+      afterLowering <- Lowering.run(afterDocumentor)
+      afterMonomorph <- Monomorph.run(afterLowering)
+      afterSimplifier <- Simplifier.run(afterMonomorph)
+      afterClosureConv <- ClosureConv.run(afterSimplifier)
+      afterLambdaLift <- LambdaLift.run(afterClosureConv)
+      afterTailrec <- Tailrec.run(afterLambdaLift)
+      afterOptimizer <- Optimizer.run(afterTailrec)
+      afterTreeShaker <- TreeShaker.run(afterOptimizer)
+      afterVarNumbering <- VarNumbering.run(afterTreeShaker)
+      afterFinalize <- Finalize.run(afterVarNumbering)
+      afterEraser <- Eraser.run(afterFinalize)
+      afterJvmBackend <- JvmBackend.run(afterEraser)
+      afterFinish <- Finish.run(afterJvmBackend)
+    } yield afterFinish
+
+    // Shutdown fork join pool.
+    shutdownForkJoin()
+
+    // Reset the progress bar.
+    progressBar.complete()
+
+    // Return the result.
+    result
+  } catch {
+    case ex: InternalCompilerException =>
+      CrashHandler.handleCrash(ex)(this)
+      throw ex
+  }
+
+  /**
+    * Compiles the given typed ast to an executable ast.
+    */
+  def compile(): Validation[CompilationResult, CompilationMessage] =
+    Validation.flatMapN(check())(codeGen)
 
   /**
     * Enters the phase with the given name.
@@ -280,6 +554,10 @@ class Flix {
   def phase[A](phase: String)(f: => A): A = {
     // Initialize the phase time object.
     currentPhase = PhaseTime(phase, 0, Nil)
+
+    if (options.progress) {
+      progressBar.observe(currentPhase.phase, "", sample = false)
+    }
 
     // Measure the execution time.
     val t = System.nanoTime()
@@ -293,12 +571,11 @@ class Flix {
     phaseTimers += currentPhase
 
     // Print performance information if in verbose mode.
-    if (options.verbosity == Verbosity.Verbose) {
+    if (options.debug) {
       // Print information about the phase.
       val d = new Duration(e)
-      val terminalCtx = TerminalContext.AnsiTerminal
-      val emojiPart = terminalCtx.emitBlue("✓ ")
-      val phasePart = terminalCtx.emitBlue(f"$phase%-40s")
+      val emojiPart = formatter.blue("✓ ")
+      val phasePart = formatter.blue(f"$phase%-40s")
       val timePart = f"${d.fmtMiliSeconds}%8s"
       Console.println(emojiPart + phasePart + timePart)
 
@@ -306,7 +583,7 @@ class Flix {
       for ((subphase, e) <- currentPhase.subphases.reverse) {
         val d = new Duration(e)
         val emojiPart = "    "
-        val phasePart = terminalCtx.emitMagenta(f"$subphase%-37s")
+        val phasePart = formatter.magenta(f"$subphase%-37s")
         val timePart = f"(${d.fmtMiliSeconds}%8s)"
         Console.println(emojiPart + phasePart + timePart)
       }
@@ -334,55 +611,53 @@ class Flix {
   }
 
   /**
+    * Returns the total compilation time in nanoseconds.
+    */
+  def getTotalTime: Long = phaseTimers.foldLeft(0L) {
+    case (acc, phase) => acc + phase.time
+  }
+
+  /**
+    * A callback to indicate that work has started on the given subtask.
+    */
+  def subtask(subtask: String, sample: Boolean = false): Unit = {
+    if (options.progress) {
+      progressBar.observe(currentPhase.phase, subtask, sample)
+    }
+  }
+
+  /**
     * Returns a list of inputs constructed from the strings and paths passed to Flix.
     */
   private def getInputs: List[Input] = {
-    val si1 = getStringInputs
-    val si2 = getPathInputs
-    val si3 = if (options.core) Nil else getStandardLibraryInputs
-    si1 ::: si2 ::: si3
+    val lib = options.lib match {
+      case LibLevel.Nix => Nil
+      case LibLevel.Min => getLibraryInputs(coreLibrary)
+      case LibLevel.All => getLibraryInputs(coreLibrary ++ standardLibrary)
+    }
+    inputs.values.toList ::: lib
   }
 
   /**
-    * Returns the inputs corresponding to the strings passed to Flix.
+    * Returns the inputs for the given list of (path, text) pairs.
     */
-  private def getStringInputs: List[Input] = strings.foldLeft(List.empty[Input]) {
-    case (xs, s) => Input.Str(s) :: xs
+  private def getLibraryInputs(xs: List[(String, String)]): List[Input] = xs.foldLeft(List.empty[Input]) {
+    case (xs, (name, text)) => Input.Text(name, text, stable = true) :: xs
   }
 
   /**
-    * Returns the inputs corresponding to the paths passed to Flix.
+    * Initializes the fork join pools.
     */
-  private def getPathInputs: List[Input] = paths.foldLeft(List.empty[Input]) {
-    case (xs, p) if p.getFileName.toString.endsWith(".flix") => Input.TxtFile(p) :: xs
-    case (xs, p) if p.getFileName.toString.endsWith(".fpkg") => Input.PkgFile(p) :: xs
-    case (_, p) => throw new IllegalStateException(s"Unknown file type '${p.getFileName}'.")
+  private def initForkJoin(): Unit = {
+    forkJoinPool = new java.util.concurrent.ForkJoinPool(options.threads)
+    forkJoinTaskSupport = new scala.collection.parallel.ForkJoinTaskSupport(forkJoinPool)
   }
 
   /**
-    * Returns the inputs for the standard library.
+    * Shuts down the fork join pools.
     */
-  private def getStandardLibraryInputs: List[Input] = library.foldLeft(List.empty[Input]) {
-    case (xs, (name, text)) => Input.Internal(name, text) :: xs
-  }
-
-  /**
-    * Returns an execution context fixed to the given number of `threads`.
-    */
-  private def mkExecutionContext(threads: Int): ExecutionContext = {
-    val service = mkExecutorService(threads)
-    ExecutionContext.fromExecutorService(service)
-  }
-
-  /**
-    * Returns an executor service fixed to the given number of `threads`.
-    */
-  private def mkExecutorService(threads: Int): ExecutorService = {
-    Executors.newFixedThreadPool(threads, (r: Runnable) => {
-      val t = new Thread(r)
-      t.setDaemon(true)
-      t
-    })
+  private def shutdownForkJoin(): Unit = {
+    forkJoinPool.shutdown()
   }
 
 }

@@ -1,5 +1,6 @@
 /*
  * Copyright 2017 Ramin Zarifi
+ * Copyright 2021 Jonathan Lindegaard Starup
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,15 +17,12 @@
 
 package ca.uwaterloo.flix.language.phase.jvm
 
-import java.lang.reflect.Modifier
-
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.Ast.Polarity
-import ca.uwaterloo.flix.language.ast.FinalAst._
+import ca.uwaterloo.flix.language.ast.ErasedAst._
 import ca.uwaterloo.flix.language.ast.SemanticOperator._
-import ca.uwaterloo.flix.language.ast._
-import ca.uwaterloo.flix.util.{InternalCompilerException, Verbosity}
-import ca.uwaterloo.flix.language.ast.MonoType
+import ca.uwaterloo.flix.language.ast.{MonoType, _}
+import ca.uwaterloo.flix.language.phase.jvm.JvmName.MethodDescriptor
+import ca.uwaterloo.flix.util.InternalCompilerException
 import org.objectweb.asm
 import org.objectweb.asm.Opcodes._
 import org.objectweb.asm._
@@ -38,329 +36,225 @@ object GenExpression {
     * Emits code for the given expression `exp0` to the given method `visitor` in the `currentClass`.
     */
   def compileExpression(exp0: Expression, visitor: MethodVisitor, currentClass: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label)(implicit root: Root, flix: Flix): Unit = exp0 match {
-    case Expression.Unit =>
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-        AsmOps.getMethodDescriptor(Nil, JvmType.Unit), false)
-    case Expression.True => visitor.visitInsn(ICONST_1)
-    case Expression.False => visitor.visitInsn(ICONST_0)
-    case Expression.Char(c) => compileInt(visitor, c)
-    case Expression.Float32(f) => f match {
-      case 0f => visitor.visitInsn(FCONST_0)
-      case 1f => visitor.visitInsn(FCONST_1)
-      case 2f => visitor.visitInsn(FCONST_2)
-      case _ => visitor.visitLdcInsn(f)
-    }
-    case Expression.Float64(d) => d match {
-      case 0d => visitor.visitInsn(DCONST_0)
-      case 1d => visitor.visitInsn(DCONST_1)
-      case _ => visitor.visitLdcInsn(d)
-    }
-    case Expression.Int8(b) => compileInt(visitor, b)
-    case Expression.Int16(s) => compileInt(visitor, s)
-    case Expression.Int32(i) => compileInt(visitor, i)
-    case Expression.Int64(l) => compileInt(visitor, l, isLong = true)
-    case Expression.BigInt(ii) =>
-      visitor.visitTypeInsn(NEW, JvmName.BigInteger.toInternalName)
+    case Expression.Unit(loc) =>
+      addSourceLine(visitor, loc)
+      visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName,
+        BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.toDescriptor)
+
+    case Expression.Null(tpe, loc) =>
+      addSourceLine(visitor, loc)
+      visitor.visitInsn(ACONST_NULL)
+      AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
+
+    case Expression.True(loc) =>
+      addSourceLine(visitor, loc)
+      visitor.visitInsn(ICONST_1)
+
+    case Expression.False(loc) =>
+      addSourceLine(visitor, loc)
+      visitor.visitInsn(ICONST_0)
+
+    case Expression.Char(c, loc) =>
+      addSourceLine(visitor, loc)
+      compileInt(visitor, c)
+
+    case Expression.Float32(f, loc) =>
+      addSourceLine(visitor, loc)
+      f match {
+        case 0f => visitor.visitInsn(FCONST_0)
+        case 1f => visitor.visitInsn(FCONST_1)
+        case 2f => visitor.visitInsn(FCONST_2)
+        case _ => visitor.visitLdcInsn(f)
+      }
+
+    case Expression.Float64(d, loc) =>
+      addSourceLine(visitor, loc)
+      d match {
+        case 0d => visitor.visitInsn(DCONST_0)
+        case 1d => visitor.visitInsn(DCONST_1)
+        case _ => visitor.visitLdcInsn(d)
+      }
+
+    case Expression.Int8(b, loc) =>
+      addSourceLine(visitor, loc)
+      compileInt(visitor, b)
+
+    case Expression.Int16(s, loc) =>
+      addSourceLine(visitor, loc)
+      compileInt(visitor, s)
+
+    case Expression.Int32(i, loc) =>
+      addSourceLine(visitor, loc)
+      compileInt(visitor, i)
+
+    case Expression.Int64(l, loc) =>
+      addSourceLine(visitor, loc)
+      compileInt(visitor, l, isLong = true)
+
+    case Expression.BigInt(ii, loc) =>
+      addSourceLine(visitor, loc)
+      visitor.visitTypeInsn(NEW, BackendObjType.BigInt.jvmName.toInternalName)
       visitor.visitInsn(DUP)
       visitor.visitLdcInsn(ii.toString)
-      visitor.visitMethodInsn(INVOKESPECIAL, JvmName.BigInteger.toInternalName, "<init>",
+      visitor.visitMethodInsn(INVOKESPECIAL, BackendObjType.BigInt.jvmName.toInternalName, "<init>",
         AsmOps.getMethodDescriptor(List(JvmType.String), JvmType.Void), false)
-    case Expression.Str(s) => visitor.visitLdcInsn(s)
+
+    case Expression.Str(s, loc) =>
+      addSourceLine(visitor, loc)
+      visitor.visitLdcInsn(s)
 
     case Expression.Var(sym, tpe, _) =>
       readVar(sym, tpe, visitor)
 
-    case Expression.Closure(sym, freeVars, fnType, tpe, loc) =>
-      // ClosureInfo
-      val closure = ClosureInfo(sym, freeVars, fnType)
+    case Expression.Closure(sym, closureArgs, fnType, _, _) =>
       // JvmType of the closure
-      val jvmType = JvmOps.getClosureClassType(closure)
+      val jvmType = JvmOps.getClosureClassType(sym, fnType)
       // new closure instance
       visitor.visitTypeInsn(NEW, jvmType.name.toInternalName)
       // Duplicate
       visitor.visitInsn(DUP)
-      // Load the context object
-      visitor.visitVarInsn(ALOAD, 1)
+      visitor.visitMethodInsn(INVOKESPECIAL, jvmType.name.toInternalName, JvmName.ConstructorMethod, MethodDescriptor.NothingToVoid.toDescriptor, false)
       // Capturing free args
-      for (f <- freeVars) {
-        val v = Expression.Var(f.sym, f.tpe, loc)
-        compileExpression(v, visitor, currentClass, lenv0, entryPoint)
+      for ((arg, i) <- closureArgs.zipWithIndex) {
+        val erasedArgType = JvmOps.getErasedJvmType(arg.tpe)
+        visitor.visitInsn(DUP)
+        compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
+        visitor.visitFieldInsn(PUTFIELD, jvmType.name.toInternalName, s"clo$i", erasedArgType.toDescriptor)
       }
-      // Calling the constructor
-      val varTypes = freeVars.map(_.tpe).map(JvmOps.getErasedJvmType)
-      visitor.visitMethodInsn(INVOKESPECIAL, jvmType.name.toInternalName, "<init>", AsmOps.getMethodDescriptor(JvmType.Object +: varTypes, JvmType.Void), false)
 
-    case Expression.ApplyClo(exp, args, tpe, loc) =>
-      // Label for the loop
-      val loop = new Label
-      // Type of the continuation interface
-      val cont = JvmOps.getContinuationInterfaceType(exp.tpe)
-      // Type of the function interface
+    case Expression.ApplyClo(exp, args, tpe, _) =>
+      // Type of the function abstract class
       val functionInterface = JvmOps.getFunctionInterfaceType(exp.tpe)
-      // Result type
-      val resultType = JvmOps.getErasedJvmType(tpe)
-      // Put the closure on `continuation` field of `Context`
-      visitor.visitVarInsn(ALOAD, 1)
+      val closureAbstractClass = JvmOps.getClosureAbstractClassType(exp.tpe)
+      // previous JvmOps functions are already partial pattern matches
+      val MonoType.Arrow(_, closureResultType) = exp.tpe
+      val backendContinuationType = BackendObjType.Continuation(BackendType.toErasedBackendType(closureResultType))
+
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
-      // Casting to JvmType of FunctionInterface
-      visitor.visitTypeInsn(CHECKCAST, functionInterface.name.toInternalName)
-      // Saving the continuation so we don't have to use calculate this again
-      visitor.visitInsn(DUP)
-      // Putting args on the stack
-      for (arg <- args) {
+      // Casting to JvmType of closure abstract class
+      visitor.visitTypeInsn(CHECKCAST, closureAbstractClass.name.toInternalName)
+      // retrieving the unique thread object
+      visitor.visitMethodInsn(INVOKEVIRTUAL, closureAbstractClass.name.toInternalName, GenClosureAbstractClasses.GetUniqueThreadClosureFunctionName, AsmOps.getMethodDescriptor(Nil, closureAbstractClass), false)
+      // Putting args on the Fn class
+      for ((arg, i) <- args.zipWithIndex) {
         // Duplicate the FunctionInterface
         visitor.visitInsn(DUP)
-        // Erased Type
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
         // Evaluating the expression
         compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
-        if (AsmOps.getStackSize(argErasedType) == 1) {
-          visitor.visitInsn(SWAP)
-        } else {
-          visitor.visitInsn(DUP2_X1)
-          visitor.visitInsn(POP2)
-        }
+        visitor.visitFieldInsn(PUTFIELD, functionInterface.name.toInternalName,
+          s"arg$i", JvmOps.getErasedJvmType(arg.tpe).toDescriptor)
       }
-      visitor.visitInsn(POP)
-      // Saving args on the continuation interface in reverse
-      for ((arg, ind) <- args.zipWithIndex.reverse) {
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
-        visitor.visitMethodInsn(INVOKEINTERFACE, functionInterface.name.toInternalName, s"setArg$ind",
-          AsmOps.getMethodDescriptor(List(argErasedType), JvmType.Void), true)
-      }
-      visitor.visitFieldInsn(PUTFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      // Begin of the loop
-      visitor.visitLabel(loop)
-      // Getting `continuation` field on `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitFieldInsn(GETFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      // Setting `continuation` field of global to `null`
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitInsn(ACONST_NULL)
-      visitor.visitFieldInsn(PUTFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      // Cast to the continuation
-      visitor.visitTypeInsn(CHECKCAST, cont.name.toInternalName)
-      // Duplicate
-      visitor.visitInsn(DUP)
-      // Save it on the IFO local variable
-      visitor.visitVarInsn(ASTORE, 2)
-      // Call invoke
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitMethodInsn(INVOKEINTERFACE, cont.name.toInternalName, "invoke", AsmOps.getMethodDescriptor(List(JvmType.Context), JvmType.Void), true)
-      // Getting `continuation` field on `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitFieldInsn(GETFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      visitor.visitJumpInsn(IFNONNULL, loop)
-      // Load IFO from local variable and invoke `getResult` on it
-      visitor.visitVarInsn(ALOAD, 2)
-      visitor.visitMethodInsn(INVOKEINTERFACE, cont.name.toInternalName, "getResult", AsmOps.getMethodDescriptor(Nil, resultType), true)
+      // Calling unwind and unboxing
+      visitor.visitMethodInsn(INVOKEVIRTUAL, functionInterface.name.toInternalName,
+        backendContinuationType.UnwindMethod.name, AsmOps.getMethodDescriptor(Nil, JvmOps.getErasedJvmType(tpe)), false)
       AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
 
-    case Expression.ApplyDef(name, args, tpe, loc) =>
-      // Label for the loop
-      val loop = new Label
-      // Namespace of the Def
-      val ns = JvmOps.getNamespace(name)
-      // JvmType of `ns`
-      val nsJvmType = JvmOps.getNamespaceClassType(ns)
-      // Name of the field for `ns` on `Context`
-      val nsFieldName = JvmOps.getNamespaceFieldNameInContextClass(ns)
-      // Field for Def on `ns`
-      val defFiledName = JvmOps.getDefFieldNameInNamespaceClass(name)
+    case Expression.ApplyDef(name, args, tpe, _) =>
       // JvmType of Def
       val defJvmType = JvmOps.getFunctionDefinitionClassType(name)
-      // Type of the function
-      val fnType = root.defs(name).tpe
-      // Type of the continuation interface
-      val cont = JvmOps.getContinuationInterfaceType(fnType)
-      // Type of the function interface
-      val functionInterface = JvmOps.getFunctionInterfaceType(fnType)
-      // Put the closure on `continuation` field of `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      // Load `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      // Load `ns`
-      visitor.visitFieldInsn(GETFIELD, JvmName.Context.toInternalName, nsFieldName, nsJvmType.toDescriptor)
-      // Load `continuation`
-      visitor.visitFieldInsn(GETFIELD, nsJvmType.name.toInternalName, defFiledName, defJvmType.toDescriptor)
-      // Result type
-      val resultType = JvmOps.getErasedJvmType(tpe)
-      // Casting to JvmType of FunctionInterface
-      visitor.visitTypeInsn(CHECKCAST, functionInterface.name.toInternalName)
-      visitor.visitInsn(DUP)
-      // Putting args on the stack
-      for (arg <- args) {
+      // previous JvmOps function are already partial pattern matches
+      val backendContinuationType = BackendObjType.Continuation(BackendType.toErasedBackendType(tpe))
+
+
+      // Put the def on the stack
+      AsmOps.compileDefSymbol(name, visitor)
+
+      // Putting args on the Fn class
+      for ((arg, i) <- args.zipWithIndex) {
         // Duplicate the FunctionInterface
         visitor.visitInsn(DUP)
-        // Erased Type
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
         // Evaluating the expression
         compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
-        if (AsmOps.getStackSize(argErasedType) == 1) {
-          visitor.visitInsn(SWAP)
-        } else {
-          visitor.visitInsn(DUP2_X1)
-          visitor.visitInsn(POP2)
-        }
+        visitor.visitFieldInsn(PUTFIELD, defJvmType.name.toInternalName,
+          s"arg$i", JvmOps.getErasedJvmType(arg.tpe).toDescriptor)
       }
-      visitor.visitInsn(POP)
-      // Saving args on the continuation interface in reverse
-      for ((arg, ind) <- args.zipWithIndex.reverse) {
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
-        visitor.visitMethodInsn(INVOKEINTERFACE, functionInterface.name.toInternalName, s"setArg$ind",
-          AsmOps.getMethodDescriptor(List(argErasedType), JvmType.Void), true)
-      }
-      visitor.visitFieldInsn(PUTFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      // Begin of the loop
-      visitor.visitLabel(loop)
-      // Getting `continuation` field on `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitFieldInsn(GETFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-
-      // Setting `continuation` field of global to `null`
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitInsn(ACONST_NULL)
-      visitor.visitFieldInsn(PUTFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      // Cast to the continuation
-      visitor.visitTypeInsn(CHECKCAST, cont.name.toInternalName)
-      // Duplicate
-      visitor.visitInsn(DUP)
-      // Save it on the IFO local variable
-      visitor.visitVarInsn(ASTORE, 2)
-      // Call invoke
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitMethodInsn(INVOKEINTERFACE, cont.name.toInternalName, "invoke", AsmOps.getMethodDescriptor(List(JvmType.Context), JvmType.Void), true)
-      // Getting `continuation` field on `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      visitor.visitFieldInsn(GETFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      visitor.visitJumpInsn(IFNONNULL, loop)
-      // Load IFO from local variable and invoke `getResult` on it
-      visitor.visitVarInsn(ALOAD, 2)
-      visitor.visitMethodInsn(INVOKEINTERFACE, cont.name.toInternalName, "getResult", AsmOps.getMethodDescriptor(Nil, resultType), true)
+      // Calling unwind and unboxing
+      visitor.visitMethodInsn(INVOKEVIRTUAL, defJvmType.name.toInternalName, backendContinuationType.UnwindMethod.name,
+        AsmOps.getMethodDescriptor(Nil, JvmOps.getErasedJvmType(tpe)), false)
       AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
 
-    case Expression.ApplyEff(sym, args, tpe, loc) =>
-      throw InternalCompilerException(s"ApplyEff not implemented in JVM backend!")
-
-    case Expression.ApplyCloTail(exp, args, tpe, loc) =>
-      // Type of the function interface
+    case Expression.ApplyCloTail(exp, args, _, _) =>
+      // Type of the function abstract class
       val functionInterface = JvmOps.getFunctionInterfaceType(exp.tpe)
-      // Result type
-      val resultType = JvmOps.getErasedJvmType(tpe)
-      // Loading `Context`
-      visitor.visitVarInsn(ALOAD, 1)
+      val closureAbstractClass = JvmOps.getClosureAbstractClassType(exp.tpe)
       // Evaluating the closure
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
-      // Casting to JvmType of FunctionInterface
-      visitor.visitTypeInsn(CHECKCAST, functionInterface.name.toInternalName)
-      // Saving the continuation so we don't have to use calculate this again
-      visitor.visitInsn(DUP)
-      // Putting args on the stack
-      for (arg <- args) {
+      // Casting to JvmType of closure abstract class
+      visitor.visitTypeInsn(CHECKCAST, closureAbstractClass.name.toInternalName)
+      // retrieving the unique thread object
+      visitor.visitMethodInsn(INVOKEVIRTUAL, closureAbstractClass.name.toInternalName, GenClosureAbstractClasses.GetUniqueThreadClosureFunctionName, AsmOps.getMethodDescriptor(Nil, closureAbstractClass), false)
+      // Putting args on the Fn class
+      for ((arg, i) <- args.zipWithIndex) {
         // Duplicate the FunctionInterface
         visitor.visitInsn(DUP)
-        // Erased Type
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
         // Evaluating the expression
         compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
-        if (AsmOps.getStackSize(argErasedType) == 1) {
-          visitor.visitInsn(SWAP)
-        } else {
-          visitor.visitInsn(DUP2_X1)
-          visitor.visitInsn(POP2)
-        }
+        visitor.visitFieldInsn(PUTFIELD, functionInterface.name.toInternalName,
+          s"arg$i", JvmOps.getErasedJvmType(arg.tpe).toDescriptor)
       }
-      visitor.visitInsn(POP)
-      // Saving args to continuation in reverse order
-      for ((arg, ind) <- args.zipWithIndex.reverse) {
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
-        // Setting the arg
-        visitor.visitMethodInsn(INVOKEINTERFACE, functionInterface.name.toInternalName, s"setArg$ind",
-          AsmOps.getMethodDescriptor(List(argErasedType), JvmType.Void), true)
-      }
-      // Placing the interface on continuation field of `Context`
-      visitor.visitFieldInsn(PUTFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      // Dummy value, since we have to put a result on top of the arg, this will be thrown away
-      pushDummyValue(visitor, tpe)
+      // Return the closure
+      visitor.visitInsn(ARETURN)
 
-    case Expression.ApplyDefTail(name, args, tpe, loc) =>
-      // Namespace of the Def
-      val ns = JvmOps.getNamespace(name)
-      // JvmType of `ns`
-      val nsJvmType = JvmOps.getNamespaceClassType(ns)
-      // Name of the field for `ns` on `Context`
-      val nsFieldName = JvmOps.getNamespaceFieldNameInContextClass(ns)
-      // Field for Def on `ns`
-      val defFiledName = JvmOps.getDefFieldNameInNamespaceClass(name)
-      // JvmType of Def
-      val defJvmType = JvmOps.getFunctionDefinitionClassType(name)
+    case Expression.ApplyDefTail(name, args, _, _) =>
       // Type of the function
       val fnType = root.defs(name).tpe
-      // Type of the continuation interface
-      val cont = JvmOps.getContinuationInterfaceType(fnType)
-      // Type of the function interface
+      // Type of the function abstract class
       val functionInterface = JvmOps.getFunctionInterfaceType(fnType)
-      // Put the def on `continuation` field of `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      // Load `Context`
-      visitor.visitVarInsn(ALOAD, 1)
-      // Load `ns`
-      visitor.visitFieldInsn(GETFIELD, JvmName.Context.toInternalName, nsFieldName, nsJvmType.toDescriptor)
-      // Load Function
-      visitor.visitFieldInsn(GETFIELD, nsJvmType.name.toInternalName, defFiledName, defJvmType.toDescriptor)
-      // Result type
-      val resultType = JvmOps.getErasedJvmType(tpe)
-      // Casting to JvmType of FunctionInterface
-      visitor.visitTypeInsn(CHECKCAST, functionInterface.name.toInternalName)
-      // Putting args on the stack
-      visitor.visitInsn(DUP)
-      for (arg <- args) {
+
+      // Put the def on the stack
+      AsmOps.compileDefSymbol(name, visitor)
+      // Putting args on the Fn class
+      for ((arg, i) <- args.zipWithIndex) {
         // Duplicate the FunctionInterface
         visitor.visitInsn(DUP)
-        // Erased Type
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
         // Evaluating the expression
         compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
-        if (AsmOps.getStackSize(argErasedType) == 1) {
-          visitor.visitInsn(SWAP)
-        } else {
-          visitor.visitInsn(DUP2_X1)
-          visitor.visitInsn(POP2)
-        }
+        visitor.visitFieldInsn(PUTFIELD, functionInterface.name.toInternalName,
+          s"arg$i", JvmOps.getErasedJvmType(arg.tpe).toDescriptor)
       }
-      visitor.visitInsn(POP)
-      // Saving args on the continuation in reverse order
-      for ((arg, ind) <- args.zipWithIndex.reverse) {
-        val argErasedType = JvmOps.getErasedJvmType(arg.tpe)
-        visitor.visitMethodInsn(INVOKEINTERFACE, functionInterface.name.toInternalName, s"setArg$ind",
-          AsmOps.getMethodDescriptor(List(argErasedType), JvmType.Void), true)
-      }
-      // Placing the interface on continuation field of `Context`
-      visitor.visitFieldInsn(PUTFIELD, JvmName.Context.toInternalName, "continuation", JvmType.Object.toDescriptor)
-      // Dummy value, since we have to put a result on top of the arg, this will be thrown away
-      pushDummyValue(visitor, tpe)
+      // Return the def
+      visitor.visitInsn(ARETURN)
 
-    case Expression.ApplyEffTail(sym, args, tpe, loc) => ??? // TODO
-
-    case Expression.ApplySelfTail(name, formals, actuals, tpe, loc) =>
-      // Evaluate each argument and push the result on the stack.
-      for (arg <- actuals) {
+    case Expression.ApplySelfTail(sym, _, actuals, _, _) =>
+      // The function abstract class name
+      val functionType = JvmOps.getFunctionInterfaceType(root.defs(sym).tpe)
+      // Evaluate each argument and put the result on the Fn class.
+      for ((arg, i) <- actuals.zipWithIndex) {
         visitor.visitVarInsn(ALOAD, 0)
         // Evaluate the argument and push the result on the stack.
         compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
-      }
-      // The values are on the stack in reverse order, so we must iterate over the arguments in reverse order.
-      for ((arg, ind) <- actuals.zipWithIndex.reverse) {
-        val argType = JvmOps.getErasedJvmType(arg.tpe)
-        visitor.visitMethodInsn(INVOKEVIRTUAL, currentClass.name.toInternalName, s"setArg$ind",
-          AsmOps.getMethodDescriptor(List(argType), JvmType.Void), false)
+        visitor.visitFieldInsn(PUTFIELD, functionType.name.toInternalName,
+          s"arg$i", JvmOps.getErasedJvmType(arg.tpe).toDescriptor)
       }
       // Jump to the entry point of the method.
       visitor.visitJumpInsn(GOTO, entryPoint)
 
     case Expression.Unary(sop, op, exp, _, _) =>
-      // TODO: Ramin: Must not use `op`, should only use `sop`.
-      compileUnaryExpr(exp, currentClass, visitor, lenv0, entryPoint, op, sop)
+      sop match {
+        case SemanticOperator.ObjectOp.EqNull =>
+          compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+          val condElse = new Label()
+          val condEnd = new Label()
+          visitor.visitJumpInsn(IFNULL, condElse)
+          visitor.visitInsn(ICONST_0)
+          visitor.visitJumpInsn(GOTO, condEnd)
+          visitor.visitLabel(condElse)
+          visitor.visitInsn(ICONST_1)
+          visitor.visitLabel(condEnd)
+        case SemanticOperator.ObjectOp.NeqNull =>
+          compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+          val condElse = new Label()
+          val condEnd = new Label()
+          visitor.visitJumpInsn(IFNULL, condElse)
+          visitor.visitInsn(ICONST_1)
+          visitor.visitJumpInsn(GOTO, condEnd)
+          visitor.visitLabel(condElse)
+          visitor.visitInsn(ICONST_0)
+          visitor.visitLabel(condEnd)
+        case _ =>
+          // TODO: Ramin: Must not use `op`, should only use `sop`.
+          compileUnaryExpr(exp, currentClass, visitor, lenv0, entryPoint, op, sop)
+      }
 
     case Expression.Binary(sop, op, exp1, exp2, _, _) =>
       // TODO: Ramin: Must not use `op`, should only use `sop`.
@@ -385,7 +279,7 @@ object GenExpression {
       compileExpression(exp3, visitor, currentClass, lenv0, entryPoint)
       visitor.visitLabel(ifEnd)
 
-    case Expression.Branch(exp, branches, tpe, loc) =>
+    case Expression.Branch(exp, branches, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // Calculating the updated jumpLabels map
@@ -408,7 +302,7 @@ object GenExpression {
       // label for the end of branches
       visitor.visitLabel(endLabel)
 
-    case Expression.JumpTo(sym, tpe, loc) =>
+    case Expression.JumpTo(sym, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // Jumping to the label
@@ -422,17 +316,37 @@ object GenExpression {
       val jvmType = JvmOps.getJvmType(exp1.tpe)
       // Store instruction for `jvmType`
       val iStore = AsmOps.getStoreInstruction(jvmType)
-      visitor.visitVarInsn(iStore, sym.getStackOffset + 3)
+      visitor.visitVarInsn(iStore, sym.getStackOffset + 1)
       compileExpression(exp2, visitor, currentClass, lenv0, entryPoint)
 
-    case Expression.LetRec(sym, exp1, exp2, _, _) =>
-      ??? // TODO: Ramin: Implement let rec. (The signature of let rec might need to change.)
+    case Expression.LetRec(varSym, index, defSym, exp1, exp2, _, loc) =>
+      // Adding source line number for debugging
+      addSourceLine(visitor, loc)
+      // Jvm Type of the `exp1`
+      val jvmType = JvmOps.getJvmType(exp1.tpe)
+      // Store instruction for `jvmType`
+      val iStore = AsmOps.getStoreInstruction(jvmType)
+      // JvmType of the closure
+      val cloType = JvmOps.getClosureClassType(defSym, exp1.tpe)
 
-    case Expression.Is(enum, tag, exp, loc) =>
+      // Store temp recursive value
+      visitor.visitInsn(ACONST_NULL)
+      visitor.visitVarInsn(iStore, varSym.getStackOffset + 1)
+      // Compile the closure
+      compileExpression(exp1, visitor, currentClass, lenv0, entryPoint)
+      // fix the local and closure reference
+      visitor.visitInsn(DUP)
+      visitor.visitInsn(DUP)
+      visitor.visitFieldInsn(PUTFIELD, cloType.name.toInternalName, s"clo$index", JvmOps.getErasedJvmType(exp1.tpe).toDescriptor)
+      // Store the closure locally (maybe not needed?)
+      visitor.visitVarInsn(iStore, varSym.getStackOffset + 1)
+      compileExpression(exp2, visitor, currentClass, lenv0, entryPoint)
+
+    case Expression.Is(_, tag, exp, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // We get the `TagInfo` for the tag
-      val tagInfo = JvmOps.getTagInfo(exp.tpe, tag)
+      val tagInfo = JvmOps.getTagInfo(exp.tpe, tag.name)
       // We get the JvmType of the class for tag
       val classType = JvmOps.getTagClassType(tagInfo)
 
@@ -445,36 +359,49 @@ object GenExpression {
     case Expression.Tag(enum, tag, exp, tpe, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
-
-      val tagInfo = JvmOps.getTagInfo(tpe, tag)
+      // Get the tag info.
+      val tagInfo = JvmOps.getTagInfo(tpe, tag.name)
       // We get the JvmType of the class for tag
       val classType = JvmOps.getTagClassType(tagInfo)
-      /*
-     If the definition of the enum case has a `Unit` field, then it is represented by singleton pattern which means
-     there is only one instance of the class initiated as a field. We have to fetch this field instead of instantiating
-     a new one.
-     */
-      // Creating a new instance of the class
-      visitor.visitTypeInsn(NEW, classType.name.toInternalName)
-      visitor.visitInsn(DUP)
-      if (JvmOps.isUnitTag(tagInfo)) {
-        visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-          AsmOps.getMethodDescriptor(Nil, JvmType.Unit), false)
+
+      ///
+      /// Special Case: A tag with a single argument: The unit argument.
+      ///
+      // TODO: This is a hack until the new and improved backend arrives.
+      val whitelistedEnums = List(
+        Symbol.mkEnumSym("Comparison"),
+        Symbol.mkEnumSym("RedBlackTree.RedBlackTree"),
+        Symbol.mkEnumSym("RedBlackTree.Color"),
+      )
+      if (exp.tpe == MonoType.Unit && whitelistedEnums.contains(enum)) {
+        // TODO: This is could introduce errors by if exp has side effects
+        // Read the "unitInstance" field of the appropriate class.
+        val declaration = classType.name.toInternalName
+        val descriptor = classType.toDescriptor
+        visitor.visitFieldInsn(GETSTATIC, declaration, "unitInstance", descriptor)
       } else {
+        /*
+       If the definition of the enum case has a `Unit` field, then it is represented by singleton pattern which means
+       there is only one instance of the class initiated as a field. We have to fetch this field instead of instantiating
+       a new one.
+       */
+        // Creating a new instance of the class
+        visitor.visitTypeInsn(NEW, classType.name.toInternalName)
+        visitor.visitInsn(DUP)
         // Evaluating the single argument of the class constructor
         compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+        // Descriptor of the constructor
+        val constructorDescriptor = AsmOps.getMethodDescriptor(List(JvmOps.getErasedJvmType(tagInfo.tagType)), JvmType.Void)
+        // Calling the constructor of the class
+        visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", constructorDescriptor, false)
       }
-      // Descriptor of the constructor
-      val constructorDescriptor = AsmOps.getMethodDescriptor(List(JvmOps.getErasedJvmType(tagInfo.tagType)), JvmType.Void)
-      // Calling the constructor of the class
-      visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", constructorDescriptor, false)
 
-    case Expression.Untag(enum, tag, exp, tpe, loc) =>
+    case Expression.Untag(_, tag, exp, tpe, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
 
       // We get the `TagInfo` for the tag
-      val tagInfo = JvmOps.getTagInfo(exp.tpe, tag)
+      val tagInfo = JvmOps.getTagInfo(exp.tpe, tag.name)
       // We get the JvmType of the class for the tag
       val classType = JvmOps.getTagClassType(tagInfo)
       // Evaluate the exp
@@ -490,13 +417,11 @@ object GenExpression {
 
     case Expression.Index(base, offset, tpe, _) =>
       // We get the JvmType of the class for the tuple
-      val classType = JvmOps.getTupleInterfaceType(base.tpe.asInstanceOf[MonoType.Tuple])
+      val classType = JvmOps.getTupleClassType(base.tpe.asInstanceOf[MonoType.Tuple])
       // evaluating the `base`
       compileExpression(base, visitor, currentClass, lenv0, entryPoint)
-      // Descriptor of the method
-      val methodDescriptor = AsmOps.getMethodDescriptor(Nil, JvmOps.getErasedJvmType(tpe))
-      // Invoking `getField${offset}()` method for fetching the field
-      visitor.visitMethodInsn(INVOKEINTERFACE, classType.name.toInternalName, s"getIndex$offset", methodDescriptor, true)
+      // Retrieving the field `field${offset}`
+      visitor.visitFieldInsn(GETFIELD, classType.name.toInternalName, s"field$offset", JvmOps.getErasedJvmType(tpe).toDescriptor)
       // Cast the object to it's type if it's not a primitive
       AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
 
@@ -512,44 +437,39 @@ object GenExpression {
       // Evaluating all the elements to be stored in the tuple class
       elms.foreach(compileExpression(_, visitor, currentClass, lenv0, entryPoint))
       // Erased type of `elms`
-      val erasedElmTypes = elms.map(_.tpe).map(JvmOps.getErasedJvmType).toList
+      val erasedElmTypes = elms.map(_.tpe).map(JvmOps.getErasedJvmType)
       // Descriptor of constructor
       val constructorDescriptor = AsmOps.getMethodDescriptor(erasedElmTypes, JvmType.Void)
       // Invoking the constructor
       visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", constructorDescriptor, false)
 
-    case Expression.RecordEmpty(tpe, loc) =>
+    case Expression.RecordEmpty(_, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // We get the JvmType of the class for the RecordEmpty
       val classType = JvmOps.getRecordEmptyClassType()
       // Instantiating a new object of tuple
-      visitor.visitTypeInsn(NEW, classType.name.toInternalName)
-      // Duplicating the class
-      visitor.visitInsn(DUP)
+      visitor.visitFieldInsn(GETSTATIC, classType.name.toInternalName, BackendObjType.RecordEmpty.InstanceField.name, classType.toDescriptor)
 
-      // Descriptor of constructor
-      val constructorDescriptor = AsmOps.getMethodDescriptor(List(), JvmType.Void)
-      // Invoking the constructor
-      visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", constructorDescriptor, false)
-
-    case Expression.RecordSelect(exp, label, tpe, loc) =>
+    case Expression.RecordSelect(exp, field, tpe, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
 
       // Get the correct record extend class, given the expression type 'tpe'
-      // We get the JvmType of the extended record class to call the proper getField
+      // We get the JvmType of the extended record class to retrieve the proper field
       val classType = JvmOps.getRecordType(tpe)
 
       // We get the JvmType of the record interface
       val interfaceType = JvmOps.getRecordInterfaceType()
+
+      val backendRecordExtendType = BackendObjType.RecordExtend(field.name, BackendType.toErasedBackendType(tpe), BackendObjType.RecordEmpty.toTpe)
 
       //Compile the expression exp (which should be a record), as we need to have on the stack a record in order to call
       //lookupField
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
 
       //Push the desired label of the field we want get of the record onto the stack
-      visitor.visitLdcInsn(label)
+      visitor.visitLdcInsn(field.name)
 
       //Invoke the lookupField method on the record. (To get the proper record object)
       visitor.visitMethodInsn(INVOKEINTERFACE, interfaceType.name.toInternalName, "lookupField",
@@ -558,11 +478,13 @@ object GenExpression {
       //Cast to proper record extend class
       visitor.visitTypeInsn(CHECKCAST, classType.name.toInternalName)
 
-      //Invoke the getField method on the record. (To get the proper value)
-      visitor.visitMethodInsn(INVOKEVIRTUAL, classType.name.toInternalName, "getField",
-        AsmOps.getMethodDescriptor(Nil, JvmOps.getErasedJvmType(tpe)), false)
+      //Retrieve the value field  (To get the proper value)
+      visitor.visitFieldInsn(GETFIELD, classType.name.toInternalName, backendRecordExtendType.ValueField.name, JvmOps.getErasedJvmType(tpe).toDescriptor)
 
-    case Expression.RecordExtend(label, value, rest, tpe, loc) =>
+      // Cast the field value to the expected type.
+      AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
+
+    case Expression.RecordExtend(field, value, rest, tpe, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // We get the JvmType of the class for the record extend
@@ -571,29 +493,32 @@ object GenExpression {
       // We get the JvmType of the record interface
       val interfaceType = JvmOps.getRecordInterfaceType()
 
+      // previous functions are already partial matches
+      val MonoType.RecordExtend(_, recordValueType, _) = tpe
+      val backendRecordExtendType = BackendObjType.RecordExtend(field.name, BackendType.toErasedBackendType(recordValueType), BackendObjType.RecordEmpty.toTpe)
+
       // Instantiating a new object of tuple
       visitor.visitTypeInsn(NEW, classType.name.toInternalName)
-      // Duplicating the class
       visitor.visitInsn(DUP)
-
-      //Push the required argument to call the RecordExtend constructor.
-
-      //Push the label of field (which is going to be the extension).
-      visitor.visitLdcInsn(label)
-
-      //Push the value of the field onto the stack, since it is an expression we first need to compile it.
-      compileExpression(value, visitor, currentClass, lenv0, entryPoint)
-
-      //Push the value of the rest of the record onto the stack, since it's an expression we need to compile it first.
-      compileExpression(rest, visitor, currentClass, lenv0, entryPoint)
-
-      // Descriptor of constructor
-      val constructorDescriptor = AsmOps.getMethodDescriptor(List(JvmType.String, JvmOps.getErasedJvmType(value.tpe),
-        interfaceType), JvmType.Void)
       // Invoking the constructor
-      visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", constructorDescriptor, false)
+      visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", MethodDescriptor.NothingToVoid.toDescriptor, false)
 
-    case Expression.RecordRestrict(label, rest, tpe, loc) =>
+      //Put the label of field (which is going to be the extension).
+      visitor.visitInsn(DUP)
+      visitor.visitLdcInsn(field.name)
+      visitor.visitFieldInsn(PUTFIELD, classType.name.toInternalName, backendRecordExtendType.LabelField.name, BackendObjType.String.toDescriptor)
+
+      //Put the value of the field onto the stack, since it is an expression we first need to compile it.
+      visitor.visitInsn(DUP)
+      compileExpression(value, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitFieldInsn(PUTFIELD, classType.name.toInternalName, backendRecordExtendType.ValueField.name, JvmOps.getErasedJvmType(value.tpe).toDescriptor)
+
+      //Put the value of the rest of the record onto the stack, since it's an expression we need to compile it first.
+      visitor.visitInsn(DUP)
+      compileExpression(rest, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitFieldInsn(PUTFIELD, classType.name.toInternalName, backendRecordExtendType.RestField.name, interfaceType.toDescriptor)
+
+    case Expression.RecordRestrict(field, rest, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // We get the JvmType of the record interface
@@ -602,10 +527,10 @@ object GenExpression {
       //Push the value of the rest of the record onto the stack, since it's an expression we need to compile it first.
       compileExpression(rest, visitor, currentClass, lenv0, entryPoint)
       //Push the label of field (which is going to be the removed/restricted).
-      visitor.visitLdcInsn(label)
+      visitor.visitLdcInsn(field.name)
 
       // Invoking the restrictField method
-      visitor.visitMethodInsn(INVOKEINTERFACE, interfaceType.name.toInternalName, "restrictField",
+      visitor.visitMethodInsn(INVOKEINTERFACE, interfaceType.name.toInternalName, BackendObjType.Record.RestrictFieldMethod.name,
         AsmOps.getMethodDescriptor(List(JvmType.String), interfaceType), true)
 
 
@@ -615,15 +540,16 @@ object GenExpression {
       // We push the 'length' of the array on top of stack
       compileInt(visitor, elms.length, isLong = false)
       // We get the inner type of the array
-      val jvmType = JvmOps.getErasedJvmType(tpe.asInstanceOf[MonoType.Array].tpe)
+      val jvmType = JvmOps.getJvmType(tpe.asInstanceOf[MonoType.Array].tpe)
       // Instantiating a new array of type jvmType
-      if (jvmType == JvmType.Object) { // Happens if the inner type is an object type
-        visitor.visitTypeInsn(ANEWARRAY, "java/lang/Object")
-      } else { // Happens if the inner type is a primitive type
-        visitor.visitIntInsn(NEWARRAY, AsmOps.getArrayTypeCode(jvmType))
+      jvmType match {
+        case ref: JvmType.Reference => // Happens if the inner type is an object type
+          visitor.visitTypeInsn(ANEWARRAY, ref.name.toInternalName)
+        case _ => // Happens if the inner type is a primitive type
+          visitor.visitIntInsn(NEWARRAY, AsmOps.getArrayTypeCode(jvmType))
       }
       // For each element we generate code to store it into the array
-      for (i <- 0 until elms.length) {
+      for (i <- elms.indices) {
         // Duplicates the 'array reference'
         visitor.visitInsn(DUP)
         // We push the 'index' of the current element on top of stack
@@ -683,7 +609,7 @@ object GenExpression {
       // with the load instruction corresponding to the loaded element
       visitor.visitInsn(AsmOps.getArrayLoadInstruction(jvmType))
 
-    case Expression.ArrayStore(base, index, elm, tpe, loc) =>
+    case Expression.ArrayStore(base, index, elm, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // We get the jvmType of the element to be stored
@@ -700,10 +626,9 @@ object GenExpression {
       // with the store instruction corresponding to the stored element
       visitor.visitInsn(AsmOps.getArrayStoreInstruction(jvmType))
       // Since the return type is 'unit', we put an instance of 'unit' on top of the stack
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-        AsmOps.getMethodDescriptor(Nil, JvmType.Unit), false)
+      visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
 
-    case Expression.ArrayLength(base, tpe, loc) =>
+    case Expression.ArrayLength(base, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // We get the inner type of the array
@@ -715,7 +640,7 @@ object GenExpression {
       // Pushes the 'length' of the array on top of stack
       visitor.visitInsn(ARRAYLENGTH)
 
-    case Expression.ArraySlice(base, startIndex, endIndex, tpe, loc) =>
+    case Expression.ArraySlice(base, startIndex, endIndex, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // We get the inner type of the array
@@ -736,7 +661,7 @@ object GenExpression {
       visitor.visitInsn(DUP)
       // Instantiating a new array of type jvmType
       if (jvmType == JvmType.Object) { // Happens if the inner type is an object type
-        visitor.visitTypeInsn(ANEWARRAY, "java/lang/Object")
+        visitor.visitTypeInsn(ANEWARRAY, BackendObjType.JavaObject.jvmName.toInternalName)
       } else { // Happens if the inner type is a primitive type
         visitor.visitIntInsn(NEWARRAY, AsmOps.getArrayTypeCode(jvmType))
       }
@@ -749,7 +674,7 @@ object GenExpression {
       // Swaps 'length' and 0
       visitor.visitInsn(SWAP)
       // Invoking the method to copy the source array to the destination array
-      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/System", "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V", false);
+      visitor.visitMethodInsn(INVOKESTATIC, JvmName.System.toInternalName, "arraycopy", AsmOps.getMethodDescriptor(List(JvmType.Object, JvmType.PrimInt, JvmType.Object, JvmType.PrimInt, JvmType.PrimInt), JvmType.Void), false)
       // Swaps 'new array reference' and 'length'
       visitor.visitInsn(SWAP)
       // Pops the 'length' - leaving 'new array reference' top of stack
@@ -760,18 +685,25 @@ object GenExpression {
       addSourceLine(visitor, loc)
       // JvmType of the reference class
       val classType = JvmOps.getRefClassType(tpe)
+
+      // the previous function is already partial
+      val MonoType.Ref(refValueType) = tpe
+      val backendRefType = BackendObjType.Ref(BackendType.toErasedBackendType(refValueType))
+
       // Create a new reference object
       visitor.visitTypeInsn(NEW, classType.name.toInternalName)
       // Duplicate it since one instance will get consumed by constructor
+      visitor.visitInsn(DUP)
+      // Call the constructor
+      visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", AsmOps.getMethodDescriptor(Nil, JvmType.Void), false)
+      // Duplicate it since one instance will get consumed by putfield
       visitor.visitInsn(DUP)
       // Evaluate the underlying expression
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
       // Erased type of the value of the reference
       val valueErasedType = JvmOps.getErasedJvmType(tpe.asInstanceOf[MonoType.Ref].tpe)
-      // Constructor descriptor
-      val constructorDescriptor = AsmOps.getMethodDescriptor(List(valueErasedType), JvmType.Void)
-      // Call the constructor
-      visitor.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>", constructorDescriptor, false)
+      // set the field with the ref value
+      visitor.visitFieldInsn(PUTFIELD, classType.name.toInternalName, backendRefType.ValueField.name, valueErasedType.toDescriptor)
 
     case Expression.Deref(exp, tpe, loc) =>
       // Adding source line number for debugging
@@ -780,14 +712,19 @@ object GenExpression {
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
       // JvmType of the reference class
       val classType = JvmOps.getRefClassType(exp.tpe)
-      // Get descriptor of `getValue` method
-      val methodDescriptor = AsmOps.getMethodDescriptor(Nil, JvmOps.getErasedJvmType(tpe))
+
+      // the previous function is already partial
+      val MonoType.Ref(refValueType) = exp.tpe
+      val backendRefType = BackendObjType.Ref(BackendType.toErasedBackendType(refValueType))
+
+      // Cast the ref
+      visitor.visitTypeInsn(CHECKCAST, classType.name.toInternalName)
       // Dereference the expression
-      visitor.visitMethodInsn(INVOKEVIRTUAL, classType.name.toInternalName, "getValue", methodDescriptor, false)
+      visitor.visitFieldInsn(GETFIELD, classType.name.toInternalName, backendRefType.ValueField.name, JvmOps.getErasedJvmType(tpe).toDescriptor)
       // Cast underlying value to the correct type if the underlying type is Object
       AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
 
-    case Expression.Assign(exp1, exp2, tpe, loc) =>
+    case Expression.Assign(exp1, exp2, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       // Evaluate the reference address
@@ -796,27 +733,22 @@ object GenExpression {
       compileExpression(exp2, visitor, currentClass, lenv0, entryPoint)
       // JvmType of the reference class
       val classType = JvmOps.getRefClassType(exp1.tpe)
-      // Get descriptor of `setValue` method
-      val methodDescriptor = AsmOps.getMethodDescriptor(List(JvmOps.getErasedJvmType(exp2.tpe)), JvmType.Void)
+
+      // the previous function is already partial
+      val MonoType.Ref(refValueType) = exp1.tpe
+      val backendRefType = BackendObjType.Ref(BackendType.toErasedBackendType(refValueType))
+
       // Invoke `setValue` method to set the value to the given number
-      visitor.visitMethodInsn(INVOKEVIRTUAL, classType.name.toInternalName, "setValue", methodDescriptor, false)
+      visitor.visitFieldInsn(PUTFIELD, classType.name.toInternalName, backendRefType.ValueField.name, JvmOps.getErasedJvmType(exp2.tpe).toDescriptor)
       // Since the return type is unit, we put an instance of unit on top of the stack
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-        AsmOps.getMethodDescriptor(Nil, JvmType.Unit), false)
+      visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
 
-    case Expression.HandleWith(exp, bindings, tpe, loc) => ??? // TODO
-
-    case Expression.Existential(params, exp, loc) =>
-      // TODO: Better exception.
+    case Expression.Cast(exp, tpe, loc) =>
       addSourceLine(visitor, loc)
-      AsmOps.compileThrowFlixError(visitor, JvmName.Runtime.NotImplementedError, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
 
-    case Expression.Universal(params, exp, loc) =>
-      // TODO: Better exception.
-      addSourceLine(visitor, loc)
-      AsmOps.compileThrowFlixError(visitor, JvmName.Runtime.NotImplementedError, loc)
-
-    case Expression.TryCatch(exp, rules, tpe, loc) =>
+    case Expression.TryCatch(exp, rules, _, loc) =>
       // Add source line number for debugging.
       addSourceLine(visitor, loc)
 
@@ -831,11 +763,11 @@ object GenExpression {
 
       // Introduce a label for each catch rule.
       val rulesAndLabels = rules map {
-        case rule => rule -> new Label()
+        rule => rule -> new Label()
       }
 
       // Emit a try catch block for each catch rule.
-      for ((CatchRule(sym, clazz, body), handlerLabel) <- rulesAndLabels) {
+      for ((CatchRule(_, clazz, _), handlerLabel) <- rulesAndLabels) {
         visitor.visitTryCatchBlock(beforeTryBlock, afterTryBlock, handlerLabel, asm.Type.getInternalName(clazz))
       }
 
@@ -846,24 +778,23 @@ object GenExpression {
       visitor.visitJumpInsn(GOTO, afterTryAndCatch)
 
       // Emit code for each catch rule.
-      for ((CatchRule(sym, clazz, body), handlerLabel) <- rulesAndLabels) {
+      for ((CatchRule(sym, _, body), handlerLabel) <- rulesAndLabels) {
         // Emit the label.
         visitor.visitLabel(handlerLabel)
 
         // Store the exception in a local variable.
         val istore = AsmOps.getStoreInstruction(JvmType.Object)
-        // TODO: We must store the exception in a local variable, but currently that does not work.
-        //visitor.visitVarInsn(istore, sym.getIndex + 3)
-        visitor.visitInsn(POP)
+        visitor.visitVarInsn(istore, sym.getStackOffset + 1)
 
         // Emit code for the handler body expression.
         compileExpression(body, visitor, currentClass, lenv0, entryPoint)
+        visitor.visitJumpInsn(GOTO, afterTryAndCatch)
       }
 
       // Add the label after both the try and catch rules.
       visitor.visitLabel(afterTryAndCatch)
 
-    case Expression.NativeConstructor(constructor, args, tpe, loc) =>
+    case Expression.InvokeConstructor(constructor, args, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
       val descriptor = asm.Type.getConstructorDescriptor(constructor)
@@ -877,6 +808,13 @@ object GenExpression {
         compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
         // Cast the argument to the right type.
         arg.tpe match {
+          // NB: This is not exhaustive. In the new backend we should handle all types, including multidim arrays.
+          case MonoType.Array(MonoType.Float32) => visitor.visitTypeInsn(CHECKCAST, "[F")
+          case MonoType.Array(MonoType.Float64) => visitor.visitTypeInsn(CHECKCAST, "[D")
+          case MonoType.Array(MonoType.Int8) => visitor.visitTypeInsn(CHECKCAST, "[B")
+          case MonoType.Array(MonoType.Int16) => visitor.visitTypeInsn(CHECKCAST, "[S")
+          case MonoType.Array(MonoType.Int32) => visitor.visitTypeInsn(CHECKCAST, "[I")
+          case MonoType.Array(MonoType.Int64) => visitor.visitTypeInsn(CHECKCAST, "[J")
           case MonoType.Native(clazz) =>
             val argType = asm.Type.getInternalName(clazz)
             visitor.visitTypeInsn(CHECKCAST, argType)
@@ -886,66 +824,150 @@ object GenExpression {
       // Call the constructor
       visitor.visitMethodInsn(INVOKESPECIAL, declaration, "<init>", descriptor, false)
 
-    case Expression.NativeField(field, tpe, loc) =>
+    case Expression.InvokeMethod(method, exp, args, _, loc) =>
       // Adding source line number for debugging
       addSourceLine(visitor, loc)
-      // Fetch a field from an object
-      val declaration = asm.Type.getInternalName(field.getDeclaringClass)
-      val name = field.getName
-      // Use GETSTATIC if the field is static and GETFIELD if the field is on an object
-      val getInsn = if (Modifier.isStatic(field.getModifiers)) GETSTATIC else GETFIELD
-      visitor.visitFieldInsn(getInsn, declaration, name, JvmOps.getJvmType(tpe).toDescriptor)
 
-    case Expression.NativeMethod(method, args, tpe, loc) =>
-      // Adding source line number for debugging
-      addSourceLine(visitor, loc)
+      // Evaluate the receiver object.
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      val thisType = asm.Type.getInternalName(method.getDeclaringClass)
+      visitor.visitTypeInsn(CHECKCAST, thisType)
+
+      // Retrieve the signature.
+      val signature = method.getParameterTypes
+
       // Evaluate arguments left-to-right and push them onto the stack.
-      for ((arg, index) <- args.zipWithIndex) {
+      for ((arg, argType) <- args.zip(signature)) {
         compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
-
-        // Cast the this parameter.
-        if (index == 0 && !Modifier.isStatic(method.getModifiers)) {
-          val thisType = asm.Type.getInternalName(method.getDeclaringClass)
-          visitor.visitTypeInsn(CHECKCAST, thisType)
+        if (!argType.isPrimitive) {
+          // NB: Really just a hack because the backend does not support array JVM types properly.
+          visitor.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
+        } else {
+          arg.tpe match {
+            // NB: This is not exhaustive. In the new backend we should handle all types, including multidim arrays.
+            case MonoType.Array(MonoType.Float32) => visitor.visitTypeInsn(CHECKCAST, "[F")
+            case MonoType.Array(MonoType.Float64) => visitor.visitTypeInsn(CHECKCAST, "[D")
+            case MonoType.Array(MonoType.Int8) => visitor.visitTypeInsn(CHECKCAST, "[B")
+            case MonoType.Array(MonoType.Int16) => visitor.visitTypeInsn(CHECKCAST, "[S")
+            case MonoType.Array(MonoType.Int32) => visitor.visitTypeInsn(CHECKCAST, "[I")
+            case MonoType.Array(MonoType.Int64) => visitor.visitTypeInsn(CHECKCAST, "[J")
+            case _ => // nop
+          }
         }
       }
       val declaration = asm.Type.getInternalName(method.getDeclaringClass)
       val name = method.getName
       val descriptor = asm.Type.getMethodDescriptor(method)
-      // If the method is static, use INVOKESTATIC otherwise use INVOKEVIRTUAL
-      val invokeInsn = if (Modifier.isStatic(method.getModifiers)) INVOKESTATIC else INVOKEVIRTUAL
-      visitor.visitMethodInsn(invokeInsn, declaration, name, descriptor, false)
-      // If the method is void, put a unit on top of the stack
-      if (asm.Type.getType(method.getReturnType) == asm.Type.VOID_TYPE) {
-        visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-          AsmOps.getMethodDescriptor(List(), JvmType.Unit), false)
+
+      // Check if we are invoking an interface or class.
+      if (method.getDeclaringClass.isInterface) {
+        visitor.visitMethodInsn(INVOKEINTERFACE, declaration, name, descriptor, true)
+      } else {
+        visitor.visitMethodInsn(INVOKEVIRTUAL, declaration, name, descriptor, false)
       }
 
-    case Expression.NewChannel(exp, tpe, loc) =>
+      // If the method is void, put a unit on top of the stack
+      if (asm.Type.getType(method.getReturnType) == asm.Type.VOID_TYPE) {
+        visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
+      }
+
+    case Expression.InvokeStaticMethod(method, args, _, loc) =>
+      addSourceLine(visitor, loc)
+      val signature = method.getParameterTypes
+      for ((arg, argType) <- args.zip(signature)) {
+        compileExpression(arg, visitor, currentClass, lenv0, entryPoint)
+        if (!argType.isPrimitive) {
+          // NB: Really just a hack because the backend does not support array JVM types properly.
+          visitor.visitTypeInsn(CHECKCAST, asm.Type.getInternalName(argType))
+        } else {
+          arg.tpe match {
+            // NB: This is not exhaustive. In the new backend we should handle all types, including multidim arrays.
+            case MonoType.Array(MonoType.Float32) => visitor.visitTypeInsn(CHECKCAST, "[F")
+            case MonoType.Array(MonoType.Float64) => visitor.visitTypeInsn(CHECKCAST, "[D")
+            case MonoType.Array(MonoType.Int8) => visitor.visitTypeInsn(CHECKCAST, "[B")
+            case MonoType.Array(MonoType.Int16) => visitor.visitTypeInsn(CHECKCAST, "[S")
+            case MonoType.Array(MonoType.Int32) => visitor.visitTypeInsn(CHECKCAST, "[I")
+            case MonoType.Array(MonoType.Int64) => visitor.visitTypeInsn(CHECKCAST, "[J")
+            case _ => // nop
+          }
+        }
+      }
+      val declaration = asm.Type.getInternalName(method.getDeclaringClass)
+      val name = method.getName
+      val descriptor = asm.Type.getMethodDescriptor(method)
+      // Check if we are invoking an interface or class.
+      if (method.getDeclaringClass.isInterface) {
+        visitor.visitMethodInsn(INVOKESTATIC, declaration, name, descriptor, true)
+      } else {
+        visitor.visitMethodInsn(INVOKESTATIC, declaration, name, descriptor, false)
+      }
+      if (asm.Type.getType(method.getReturnType) == asm.Type.VOID_TYPE) {
+        visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
+      }
+
+    case Expression.GetField(field, exp, tpe, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      val declaration = asm.Type.getInternalName(field.getDeclaringClass)
+      visitor.visitFieldInsn(GETFIELD, declaration, field.getName, JvmOps.getJvmType(tpe).toDescriptor)
+
+    case Expression.PutField(field, exp1, exp2, _, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp1, visitor, currentClass, lenv0, entryPoint)
+      compileExpression(exp2, visitor, currentClass, lenv0, entryPoint)
+      val declaration = asm.Type.getInternalName(field.getDeclaringClass)
+      visitor.visitFieldInsn(PUTFIELD, declaration, field.getName, JvmOps.getJvmType(exp2.tpe).toDescriptor)
+
+      // Push Unit on the stack.
+      visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
+
+    case Expression.GetStaticField(field, tpe, loc) =>
+      addSourceLine(visitor, loc)
+      val declaration = asm.Type.getInternalName(field.getDeclaringClass)
+      visitor.visitFieldInsn(GETSTATIC, declaration, field.getName, JvmOps.getJvmType(tpe).toDescriptor)
+
+    case Expression.PutStaticField(field, exp, _, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      val declaration = asm.Type.getInternalName(field.getDeclaringClass)
+      visitor.visitFieldInsn(PUTSTATIC, declaration, field.getName, JvmOps.getJvmType(exp.tpe).toDescriptor)
+
+      // Push Unit on the stack.
+      visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
+
+    case obj@Expression.NewObject(_, tpe, loc) =>
+      addSourceLine(visitor, loc)
+      val className = JvmName(ca.uwaterloo.flix.language.phase.jvm.JvmName.RootPackage, obj.name).toInternalName
+      visitor.visitTypeInsn(NEW, className)
+      visitor.visitInsn(DUP)
+      visitor.visitMethodInsn(INVOKESPECIAL, className, "<init>", AsmOps.getMethodDescriptor(Nil, JvmType.Void), false)
+
+    case Expression.NewChannel(exp, _, loc) =>
       addSourceLine(visitor, loc)
       visitor.visitTypeInsn(NEW, JvmName.Channel.toInternalName)
       visitor.visitInsn(DUP)
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
-      visitor.visitMethodInsn(INVOKESPECIAL, JvmName.Channel.toInternalName, "<init>", "(I)V", false)
+      visitor.visitMethodInsn(INVOKESPECIAL, JvmName.Channel.toInternalName, "<init>", AsmOps.getMethodDescriptor(List(JvmType.PrimInt), JvmType.Void), false)
 
     case Expression.GetChannel(exp, tpe, loc) =>
       addSourceLine(visitor, loc)
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
       visitor.visitTypeInsn(CHECKCAST, JvmName.Channel.toInternalName)
-      // TODO SJ: should the signature reference JvmName also?
-      visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.Channel.toInternalName, "get", "()Ljava/lang/Object;", false)
+      visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.Channel.toInternalName, "get", AsmOps.getMethodDescriptor(Nil, JvmType.Object), false)
       AsmOps.castIfNotPrimAndUnbox(visitor, JvmOps.getJvmType(tpe))
 
-    case Expression.PutChannel(exp1, exp2, tpe, loc) =>
+    case Expression.PutChannel(exp1, exp2, _, loc) =>
       addSourceLine(visitor, loc)
       compileExpression(exp1, visitor, currentClass, lenv0, entryPoint)
       visitor.visitTypeInsn(CHECKCAST, JvmName.Channel.toInternalName)
-      visitor.visitInsn(DUP)
       compileExpression(exp2, visitor, currentClass, lenv0, entryPoint)
       AsmOps.boxIfPrim(visitor, JvmOps.getJvmType(exp2.tpe))
-      visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.Channel.toInternalName, "put", "(Ljava/lang/Object;)V", false)
+      visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.Channel.toInternalName, "put", AsmOps.getMethodDescriptor(List(JvmType.Object), JvmType.Void), false)
+      // push unit on the stack
+      visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
 
-    case Expression.SelectChannel(rules, default, tpe, loc) =>
+
+    case Expression.SelectChannel(rules, default, _, loc) =>
       addSourceLine(visitor, loc)
       // Make a new Channel[] containing all channel expressions
 
@@ -973,42 +995,31 @@ object GenExpression {
       }
 
 
-      // TODO SJ: Should we create a JvmName for the return type here? yes
       // Invoke select in Channel. This puts a SelectChoice on the stack
       visitor.visitMethodInsn(INVOKESTATIC, JvmName.Channel.toInternalName, "select", "([Lca/uwaterloo/flix/runtime/interpreter/Channel;Z)Lca/uwaterloo/flix/runtime/interpreter/SelectChoice;", false)
 
       // Check if the default case was selected
       val defaultLabel = new Label()
       visitor.visitInsn(DUP)
-      visitor.visitFieldInsn(GETFIELD, JvmName.SelectChoice.toInternalName, "defaultChoice", "Z")
+      visitor.visitFieldInsn(GETFIELD, JvmName.SelectChoice.toInternalName, "defaultChoice", JvmType.PrimBool.toDescriptor)
       // Jump if needed
       visitor.visitJumpInsn(IFNE, defaultLabel)
 
       // Dup since we need to get the element and the relevant index
       visitor.visitInsn(DUP)
       // Get the relevant branchNumber and put it on the stack
-      visitor.visitFieldInsn(GETFIELD, JvmName.SelectChoice.toInternalName, "branchNumber", "I")
+      visitor.visitFieldInsn(GETFIELD, JvmName.SelectChoice.toInternalName, "branchNumber", JvmType.PrimInt.toDescriptor)
 
-      val labels: List[Label] = rules.map(r => new Label())
+      val labels: List[Label] = rules.map(_ => new Label())
+      val lookupErrorLabel: Label = new Label()
       val completedLabel: Label = new Label()
-      // Find the correct branch and get the associated element
-      for (((rule, index), label) <- rules.zipWithIndex.zip(labels)) {
-        // Dup since we need branchNumber for each rule
-        visitor.visitInsn(DUP)
-        // Put the current index of rules on the stack
-        compileInt(visitor, index)
-        // Get the difference of branchNumber and current index of rules
-        visitor.visitInsn(ISUB)
-        // If the difference is not 0, then it is not the correct case.
-        // Thus we jump so we don't compute anything
-        visitor.visitJumpInsn(IFNE, label)
+      // Find the correct branch with a table switch
+      visitor.visitTableSwitchInsn(0, rules.length - 1, lookupErrorLabel, labels: _*)
 
-
-        // We found the correct branch
-        // We don't need to keep track of the branchNumber anymore
-        visitor.visitInsn(POP)
-        // The SelectChoice is on top again. We now get the element of the channel
-        visitor.visitFieldInsn(GETFIELD, JvmName.SelectChoice.toInternalName, "element", "Ljava/lang/Object;")
+      for ((rule, label) <- rules.zip(labels)) {
+        visitor.visitLabel(label)
+        // The SelectChoice is on top of the stack. We get the element of the channel
+        visitor.visitFieldInsn(GETFIELD, JvmName.SelectChoice.toInternalName, "element", JvmType.Object.toDescriptor)
         // Jvm Type of the elementType
         val channelType = rule.chan.tpe.asInstanceOf[MonoType.Channel].tpe
         val jvmType = JvmOps.getErasedJvmType(channelType)
@@ -1017,18 +1028,16 @@ object GenExpression {
         // Store instruction for `jvmType`
         val iStore = AsmOps.getStoreInstruction(jvmType)
         // Extend the environment with the element from the channel
-        visitor.visitVarInsn(iStore, rule.sym.getStackOffset + 3)
+        visitor.visitVarInsn(iStore, rule.sym.getStackOffset + 1)
         // Finally compile the body of the selected rule
         compileExpression(rule.exp, visitor, currentClass, lenv0, entryPoint)
-        // Jump out of the branches so we do not go through unnecessary branches
+        // Jump out of the cases so we do not fall through to the next one
         visitor.visitJumpInsn(GOTO, completedLabel)
-
-
-        // We jumped here to not compute anything
-        visitor.visitLabel(label)
       }
 
-      // TODO SJ: throw flixError med god string ELLER egen subclass
+      // TableSwitch instruction jumps here if "0 <= index < rules.length" is not satisfied.
+      visitor.visitLabel(lookupErrorLabel)
+      // TODO: throw a better error
       // Throw exception
       visitor.visitInsn(ACONST_NULL)
       visitor.visitInsn(ATHROW)
@@ -1049,112 +1058,73 @@ object GenExpression {
       // Jump here if the correct rule has been evaluated
       visitor.visitLabel(completedLabel)
 
-    case Expression.ProcessSpawn(exp, tpe, loc) =>
+    case Expression.Spawn(exp, _, loc) =>
       addSourceLine(visitor, loc)
-      // Compile the expression, putting a function implementing the Spawnable interface on the stack
+      // Compile the expression, putting a function implementing the Runnable interface on the stack
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
-      // Call spawn method from Channel class
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Channel.toInternalName, "spawn",
-        AsmOps.getMethodDescriptor(List(JvmType.Spawnable), JvmType.Void), false)
+      visitor.visitTypeInsn(CHECKCAST, JvmName.Runnable.toInternalName)
+      // make a thread and run it
+      visitor.visitTypeInsn(NEW, "java/lang/Thread")
+      visitor.visitInsn(DUP_X1)
+      visitor.visitInsn(SWAP)
+      visitor.visitMethodInsn(INVOKESPECIAL, "java/lang/Thread", "<init>", s"(${JvmName.Runnable.toDescriptor})${JvmType.Void.toDescriptor}", false)
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Thread", "start", AsmOps.getMethodDescriptor(Nil, JvmType.Void), false)
       // Put a Unit value on the stack
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-        AsmOps.getMethodDescriptor(Nil, JvmType.Unit), false)
+      visitor.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
 
-    case Expression.ProcessSleep(exp, tpe, loc) =>
+    case Expression.Lazy(exp, tpe, loc) =>
+      // Add source line numbers for debugging.
       addSourceLine(visitor, loc)
-      // Compile the expression, putting the time to sleep in ns (as a long) on top of the stack
+
+      // Find the Lazy class name (Lazy$tpe).
+      val classType = JvmOps.getLazyClassType(tpe.asInstanceOf[MonoType.Lazy]).name.toInternalName
+
+      // Make a new lazy object and dup it to leave it on the stack.
+      visitor.visitTypeInsn(NEW, classType)
+      visitor.visitInsn(DUP)
+
+      // Compile the thunked expression and call new Lazy$erased_tpe(expression).
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESPECIAL, classType, "<init>", AsmOps.getMethodDescriptor(List(JvmType.Object), JvmType.Void), false)
+
+    case Expression.Force(exp, _, loc) =>
+      // Add source line numbers for debugging.
+      addSourceLine(visitor, loc)
+
+      // Find the Lazy class type (Lazy$tpe) and the inner value type.
+      val classMonoType = exp.tpe.asInstanceOf[MonoType.Lazy]
+      val classType = JvmOps.getLazyClassType(classMonoType)
+      val internalClassType = classType.name.toInternalName
+      val MonoType.Lazy(tpe) = classMonoType
+      val erasedType = JvmOps.getErasedJvmType(tpe)
+
+      // Emit code for the lazy expression.
       compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
 
-      // Convert the time into ms and ns
-      // Dup the time
-      visitor.visitInsn(DUP2)
+      // Lazy$tpe is expected.
+      visitor.visitTypeInsn(CHECKCAST, internalClassType)
 
-      // Calculate the ns (time % 1.000.000)
-      visitor.visitLdcInsn(1000000L)
-      visitor.visitInsn(LREM)
-      // Cast to int and store for later
-      visitor.visitInsn(L2I)
-      visitor.visitVarInsn(ISTORE, 2)
+      // Dup for later lazy.value or lazy.force(context)
+      visitor.visitInsn(DUP)
+      // Get expression
+      visitor.visitFieldInsn(GETFIELD, internalClassType, "expression", JvmType.Object.toDescriptor)
+      val alreadyInit = new Label()
+      val end = new Label()
+      // If expression == null the we just use lazy.value, otherwise lazy.force(context)
+      visitor.visitJumpInsn(IFNULL, alreadyInit)
 
-      // Calculate the ms (time / 1.000.000)
-      visitor.visitLdcInsn(1000000L)
-      visitor.visitInsn(LDIV)
+      // Call force().
+      visitor.visitMethodInsn(INVOKEVIRTUAL, internalClassType, "force", AsmOps.getMethodDescriptor(Nil, erasedType), false)
+      // goto the cast to undo erasure
+      visitor.visitJumpInsn(GOTO, end)
 
-      // Load the ns, putting ns on top of the stack
-      visitor.visitVarInsn(ILOAD, 2)
+      visitor.visitLabel(alreadyInit)
+      // Retrieve the erased value
+      visitor.visitFieldInsn(GETFIELD, internalClassType, "value", erasedType.toDescriptor)
 
-      // Call Thread.Sleep with the calculated duration in (ms, ns)
-      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Thread", "sleep", "(JI)V", false)
-      // Put a Unit value on the stack
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-        AsmOps.getMethodDescriptor(Nil, JvmType.Unit), false)
-
-    case Expression.ProcessPanic(msg, tpe, loc) =>
-      // TODO: Throw a more specific exception?
-      addSourceLine(visitor, loc)
-      AsmOps.compileThrowFlixError(visitor, JvmName.Runtime.NotImplementedError, loc)
-
-    case Expression.FixpointConstraintSet(cs, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(visitor, loc)
-
-      // Emit code for the constraint.
-      newConstraintSystem(cs, visitor)(root, flix, currentClass, lenv0, entryPoint)
-
-    case Expression.FixpointCompose(exp1, exp2, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(visitor, loc)
-
-      // Emit code for the left-hand constraint system.
-      compileExpression(exp1, visitor, currentClass, lenv0, entryPoint)
-
-      // Emit code for the right-hand constraint system.
-      compileExpression(exp2, visitor, currentClass, lenv0, entryPoint)
-
-      // Emit code for the invocation of compose.
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Solver.toInternalName, "compose", "(Lflix/runtime/fixpoint/ConstraintSystem;Lflix/runtime/fixpoint/ConstraintSystem;)Lflix/runtime/fixpoint/ConstraintSystem;", false);
-
-    case Expression.FixpointSolve(exp, stf, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(visitor, loc)
-
-      // Emit code for the constraint system.
-      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
-
-      // Emit code for the stratification.
-      newStratification(stf, visitor)(root, flix, currentClass, lenv0, entryPoint)
-
-      // Emit code for the fixpoint options.
-      newOptions(visitor)
-
-      // Emit code for the invocation of the solver.
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Solver.toInternalName, "solve", "(Lflix/runtime/fixpoint/ConstraintSystem;Lflix/runtime/fixpoint/Stratification;Lflix/runtime/fixpoint/Options;)Lflix/runtime/fixpoint/ConstraintSystem;", false)
-
-    case Expression.FixpointProject(pred, exp, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(visitor, loc)
-
-      // Instantiate the predicate symbol.
-      newPredSym(pred, visitor)(root, flix, currentClass, lenv0, entryPoint)
-
-      // Compile the constraint system.
-      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
-
-      // Invoke the project method.
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Solver.toInternalName, "project", "(Lflix/runtime/fixpoint/symbol/PredSym;Lflix/runtime/fixpoint/ConstraintSystem;)Lflix/runtime/fixpoint/ConstraintSystem;", false)
-
-    case Expression.FixpointEntails(exp1, exp2, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(visitor, loc)
-
-      // Emit code for the left-hand constraint system.
-      compileExpression(exp1, visitor, currentClass, lenv0, entryPoint)
-
-      // Emit code for the right-hand constraint system.
-      compileExpression(exp2, visitor, currentClass, lenv0, entryPoint)
-
-      // Emit code for the invocation of entails.
-      visitor.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Solver.toInternalName, "entails", "(Lflix/runtime/fixpoint/ConstraintSystem;Lflix/runtime/fixpoint/ConstraintSystem;)Z", false);
+      visitor.visitLabel(end)
+      // The result of force is a generic object so a cast is needed.
+      AsmOps.castIfNotPrim(visitor, JvmOps.getJvmType(tpe))
 
     case Expression.HoleError(sym, _, loc) =>
       addSourceLine(visitor, loc)
@@ -1162,32 +1132,109 @@ object GenExpression {
 
     case Expression.MatchError(_, loc) =>
       addSourceLine(visitor, loc)
-      AsmOps.compileThrowFlixError(visitor, JvmName.Runtime.MatchError, loc)
+      AsmOps.compileThrowFlixError(visitor, BackendObjType.MatchError.jvmName, loc)
 
-    case Expression.SwitchError(_, loc) =>
+    case Expression.BoxBool(exp, loc) =>
       addSourceLine(visitor, loc)
-      AsmOps.compileThrowFlixError(visitor, JvmName.Runtime.SwitchError, loc)
-  }
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;", false)
 
-  /*
-   * Pushes a dummy value of type `jvmType` to the top of the stack
-   */
-  private def pushDummyValue(visitor: MethodVisitor, tpe: MonoType)(implicit root: Root, flix: Flix): Unit = {
-    val erasedType = JvmOps.getErasedJvmType(tpe)
-    erasedType match {
-      case JvmType.Void => throw InternalCompilerException(s"Unexpected type: $erasedType")
-      case JvmType.PrimBool => visitor.visitInsn(ICONST_1)
-      case JvmType.PrimChar => visitor.visitInsn(ICONST_M1)
-      case JvmType.PrimByte => visitor.visitInsn(ICONST_M1)
-      case JvmType.PrimShort => visitor.visitInsn(ICONST_M1)
-      case JvmType.PrimInt => visitor.visitInsn(ICONST_M1)
-      case JvmType.PrimLong =>
-        visitor.visitInsn(ICONST_M1)
-        visitor.visitInsn(I2L)
-      case JvmType.PrimFloat => visitor.visitInsn(FCONST_1)
-      case JvmType.PrimDouble => visitor.visitInsn(DCONST_1)
-      case JvmType.Reference(_) => visitor.visitInsn(ACONST_NULL)
-    }
+
+    case Expression.BoxInt8(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Byte", "valueOf", "(B)Ljava/lang/Byte;", false)
+
+
+    case Expression.BoxInt16(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Short", "valueOf", "(S)Ljava/lang/Short;", false)
+
+
+    case Expression.BoxInt32(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", false)
+
+
+    case Expression.BoxInt64(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Long", "valueOf", "(J)Ljava/lang/Long;", false)
+
+
+    case Expression.BoxChar(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Character", "valueOf", "(C)Ljava/lang/Character;", false)
+
+
+    case Expression.BoxFloat32(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Float", "valueOf", "(F)Ljava/lang/Float;", false)
+
+
+    case Expression.BoxFloat64(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Double", "valueOf", "(D)Ljava/lang/Double;", false)
+
+    case Expression.UnboxBool(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Boolean")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Boolean", "booleanValue", "()Z", false)
+
+
+    case Expression.UnboxInt8(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Character")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Character", "charValue", "()C", false)
+
+
+    case Expression.UnboxInt16(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Short")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Short", "shortValue", "()S", false)
+
+
+    case Expression.UnboxInt32(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Integer")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Integer", "intValue", "()I", false)
+
+    case Expression.UnboxInt64(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Long")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Long", "longValue", "()J", false)
+
+
+    case Expression.UnboxChar(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Character")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Character", "charValue", "()C", false)
+
+
+    case Expression.UnboxFloat32(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Float")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Float", "floatValue", "()F", false)
+
+
+    case Expression.UnboxFloat64(exp, loc) =>
+      addSourceLine(visitor, loc)
+      compileExpression(exp, visitor, currentClass, lenv0, entryPoint)
+      visitor.visitTypeInsn(CHECKCAST, "java/lang/Double")
+      visitor.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Double", "doubleValue", "()D", false)
+
   }
 
   /*
@@ -1274,7 +1321,7 @@ object GenExpression {
     case Int32Op.Neg => visitor.visitInsn(INEG)
     case Int64Op.Neg => visitor.visitInsn(LNEG)
     case BigIntOp.Neg =>
-      visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.BigInteger.toInternalName, "negate",
+      visitor.visitMethodInsn(INVOKEVIRTUAL, BackendObjType.BigInt.jvmName.toInternalName, "negate",
         AsmOps.getMethodDescriptor(Nil, JvmType.BigInteger), false)
     case _ => throw InternalCompilerException(s"Unexpected semantic operator: $sop.")
   }
@@ -1303,7 +1350,7 @@ object GenExpression {
       visitor.visitInsn(I2L)
       visitor.visitInsn(LXOR)
     case BigIntOp.Not =>
-      visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.BigInteger.toInternalName, "not",
+      visitor.visitMethodInsn(INVOKEVIRTUAL, BackendObjType.BigInt.jvmName.toInternalName, "not",
         AsmOps.getMethodDescriptor(Nil, JvmType.BigInteger), false)
     case _ => throw InternalCompilerException(s"Unexpected semantic operator: $sop.")
   }
@@ -1369,13 +1416,13 @@ object GenExpression {
         case BinaryOperator.Plus => (IADD, LADD, FADD, DADD, "add")
         case BinaryOperator.Minus => (ISUB, LSUB, FSUB, DSUB, "subtract")
         case BinaryOperator.Times => (IMUL, LMUL, FMUL, DMUL, "multiply")
+        case BinaryOperator.Remainder => (IREM, LREM, FREM, DREM, "remainder")
         case BinaryOperator.Divide => (IDIV, LDIV, FDIV, DDIV, "divide")
-        case BinaryOperator.Modulo => (IREM, LREM, FREM, DREM, "remainder")
         case BinaryOperator.Exponentiate => throw InternalCompilerException("BinaryOperator.Exponentiate already handled.")
       }
       sop match {
-        case Float32Op.Add | Float32Op.Sub | Float32Op.Mul | Float32Op.Div | Float32Op.Rem => visitor.visitInsn(floatOp)
-        case Float64Op.Add | Float64Op.Sub | Float64Op.Mul | Float64Op.Div | Float64Op.Rem => visitor.visitInsn(doubleOp)
+        case Float32Op.Add | Float32Op.Sub | Float32Op.Mul | Float32Op.Div => visitor.visitInsn(floatOp)
+        case Float64Op.Add | Float64Op.Sub | Float64Op.Mul | Float64Op.Div => visitor.visitInsn(doubleOp)
         case Int8Op.Add | Int8Op.Sub | Int8Op.Mul | Int8Op.Div | Int8Op.Rem =>
           visitor.visitInsn(intOp)
           visitor.visitInsn(I2B)
@@ -1385,10 +1432,10 @@ object GenExpression {
         case Int32Op.Add | Int32Op.Sub | Int32Op.Mul | Int32Op.Div | Int32Op.Rem => visitor.visitInsn(intOp)
         case Int64Op.Add | Int64Op.Sub | Int64Op.Mul | Int64Op.Div | Int64Op.Rem => visitor.visitInsn(longOp)
         case BigIntOp.Add | BigIntOp.Sub | BigIntOp.Mul | BigIntOp.Div | BigIntOp.Rem =>
-          visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.BigInteger.toInternalName, bigIntOp,
+          visitor.visitMethodInsn(INVOKEVIRTUAL, BackendObjType.BigInt.jvmName.toInternalName, bigIntOp,
             AsmOps.getMethodDescriptor(List(JvmType.BigInteger), JvmType.BigInteger), false)
         case StringOp.Concat =>
-          visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.String.toInternalName, "concat",
+          visitor.visitMethodInsn(INVOKEVIRTUAL, BackendObjType.String.jvmName.toInternalName, "concat",
             AsmOps.getMethodDescriptor(List(JvmType.String), JvmType.String), false)
         case _ => throw InternalCompilerException(s"Unexpected semantic operator: $sop.")
       }
@@ -1456,11 +1503,12 @@ object GenExpression {
       case BinaryOperator.GreaterEqual => (IF_ICMPLT, FCMPL, DCMPL, IFLT)
       case BinaryOperator.Equal => (IF_ICMPNE, FCMPG, DCMPG, IFNE)
       case BinaryOperator.NotEqual => (IF_ICMPEQ, FCMPG, DCMPG, IFEQ)
+      case BinaryOperator.Spaceship => throw InternalCompilerException("Unexpected operator.")
     }
     sop match {
       case StringOp.Eq | StringOp.Neq =>
         // String can be compared using Object's `equal` method
-        visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.Object.toInternalName, "equals",
+        visitor.visitMethodInsn(INVOKEVIRTUAL, BackendObjType.JavaObject.jvmName.toInternalName, "equals",
           AsmOps.getMethodDescriptor(List(JvmType.Object), JvmType.PrimBool), false)
         visitor.visitInsn(ICONST_1)
         visitor.visitJumpInsn(intOp, condElse)
@@ -1481,7 +1529,7 @@ object GenExpression {
         visitor.visitInsn(LCMP)
         visitor.visitJumpInsn(cmp, condElse)
       case BigIntOp.Lt | BigIntOp.Le | BigIntOp.Gt | BigIntOp.Ge | BigIntOp.Eq | BigIntOp.Neq =>
-        visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.BigInteger.toInternalName, "compareTo",
+        visitor.visitMethodInsn(INVOKEVIRTUAL, BackendObjType.BigInt.jvmName.toInternalName, "compareTo",
           AsmOps.getMethodDescriptor(List(JvmType.BigInteger), JvmType.PrimInt), false)
         visitor.visitInsn(ICONST_0)
         visitor.visitJumpInsn(intOp, condElse)
@@ -1603,521 +1651,10 @@ object GenExpression {
       case Int32Op.And | Int32Op.Or | Int32Op.Xor | Int32Op.Shl | Int32Op.Shr => visitor.visitInsn(intOp)
       case Int64Op.And | Int64Op.Or | Int64Op.Xor | Int64Op.Shl | Int64Op.Shr => visitor.visitInsn(longOp)
       case BigIntOp.And | BigIntOp.Or | BigIntOp.Xor | BigIntOp.Shl | BigIntOp.Shr =>
-        visitor.visitMethodInsn(INVOKEVIRTUAL, JvmName.BigInteger.toInternalName,
+        visitor.visitMethodInsn(INVOKEVIRTUAL, BackendObjType.BigInt.jvmName.toInternalName,
           bigintOp, AsmOps.getMethodDescriptor(List(JvmOps.getJvmType(e2.tpe)), JvmType.BigInteger), false)
       case _ => throw InternalCompilerException(s"Unexpected semantic operator: $sop.")
     }
-  }
-
-  /**
-    * Emits code to instantiate a new constraint system for the given constraint `c`.
-    */
-  private def newConstraintSystem(c: Constraint, mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = c match {
-    case Constraint(cparams, head, body) =>
-      // Instantiate the constraint object.
-      newConstraint(c, mv)
-
-      // Instantiate the constraint system object.
-      mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.ConstraintSystem.toInternalName, "of", "(Lflix/runtime/fixpoint/Constraint;)Lflix/runtime/fixpoint/ConstraintSystem;", false)
-  }
-
-  /**
-    * Emits code to instantiate a new constraint system for the given constraints `cs`.
-    */
-  private def newConstraintSystem(cs: List[Constraint], mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = {
-    // Instantiate a new array of appropriate length.
-    compileInt(mv, cs.length)
-    mv.visitTypeInsn(ANEWARRAY, JvmName.Runtime.Fixpoint.Constraint.toInternalName)
-    for ((constraint, index) <- cs.zipWithIndex) {
-      // Compile each attribute and store it in the array.
-      mv.visitInsn(DUP)
-      compileInt(mv, index)
-
-      // Instantiate the attribute.
-      newConstraint(constraint, mv)
-
-      // Store the attribute in the array.
-      mv.visitInsn(AASTORE)
-    }
-
-    // Instantiate the constraint system object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.ConstraintSystem.toInternalName, "of", "([Lflix/runtime/fixpoint/Constraint;)Lflix/runtime/fixpoint/ConstraintSystem;", false)
-  }
-
-  /**
-    * Emits code to instantiate a new constraint for the given constraint `c`.
-    */
-  private def newConstraint(c: Constraint, mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = c match {
-    case Constraint(cparams, head, body) =>
-      // Emit code for the cparams.
-      newVarSyms(c.cparams.map(_.sym), mv)
-
-      // Emit code for the head atom.
-      compileHeadAtom(head, mv)
-
-      // Emit code for the body atoms.
-      compileInt(mv, c.body.length)
-      mv.visitTypeInsn(ANEWARRAY, JvmName.Runtime.Fixpoint.Predicate.Predicate.toInternalName)
-      for ((atom, index) <- c.body.zipWithIndex) {
-        // Compile each constraint param and store it in the array.
-        mv.visitInsn(DUP)
-        compileInt(mv, index)
-
-        // Compile the body atom.
-        compileBodyAtom(atom, mv)
-
-        // Store the result in the array.
-        mv.visitInsn(AASTORE)
-      }
-
-      // Instantiate a new constraint system object.
-      mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Constraint.toInternalName, "of", "([Lflix/runtime/fixpoint/symbol/VarSym;Lflix/runtime/fixpoint/predicate/Predicate;[Lflix/runtime/fixpoint/predicate/Predicate;)Lflix/runtime/fixpoint/Constraint;", false);
-
-  }
-
-  /**
-    * Compiles the given head expression `h0`.
-    */
-  private def compileHeadAtom(h0: Predicate.Head, mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = h0 match {
-    case Predicate.Head.Atom(pred, terms, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emit code for the predicate symbol.
-      newPredSym(pred, mv)
-
-      // Emit code for the polarity of the atom. A head atom is always positive.
-      mv.visitInsn(ICONST_1)
-
-      // Emit code for the head terms.
-      newHeadTerms(terms, mv)
-
-      // Instantiate a new atom predicate object.
-      mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Predicate.AtomPredicate.toInternalName, "of", "(Lflix/runtime/fixpoint/symbol/PredSym;Z[Lflix/runtime/fixpoint/term/Term;)Lflix/runtime/fixpoint/predicate/AtomPredicate;", false)
-  }
-
-  /**
-    * Compiles the given head expression `h0`.
-    */
-  private def compileBodyAtom(b0: Predicate.Body, mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = b0 match {
-
-    case Predicate.Body.Atom(pred, polarity, terms, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emit code for the predicate symbol.
-      newPredSym(pred, mv)
-
-      // Emit code for the polarity of the atom. A head atom is always positive.
-      polarity match {
-        case Polarity.Positive => mv.visitInsn(ICONST_1)
-        case Polarity.Negative => mv.visitInsn(ICONST_0)
-      }
-
-      // Emit code for the terms.
-      newBodyTerms(terms, mv)
-
-      // Instantiate a new atom predicate object.
-      mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Predicate.AtomPredicate.toInternalName, "of", "(Lflix/runtime/fixpoint/symbol/PredSym;Z[Lflix/runtime/fixpoint/term/Term;)Lflix/runtime/fixpoint/predicate/AtomPredicate;", false)
-
-    case Predicate.Body.Guard(exp, terms, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emit code for the closure.
-      compileExpression(exp, mv, clazz, lenv0, entryPoint)
-
-      // Emit code for the terms.
-      newBodyTerms(terms, mv)
-
-      // Instantiate a new filter predicate object.
-      mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Predicate.FilterPredicate.toInternalName, "of", "(Ljava/util/function/Function;[Lflix/runtime/fixpoint/term/Term;)Lflix/runtime/fixpoint/predicate/FilterPredicate;", false)
-  }
-
-  /**
-    * Emits code for the given predicate with parameter `p0`.
-    */
-  private def newPredSym(p0: PredicateWithParam, mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = p0 match {
-    case PredicateWithParam(sym, exp) => sym match {
-      case sym: Symbol.RelSym => newRelSym(sym, Some(exp), mv)
-      case sym: Symbol.LatSym => newLatSym(sym, Some(exp), mv)
-    }
-  }
-
-  /**
-    * Emits code for the given predicate symbol without any parameter `sym`.
-    */
-  private def newPredSymWithoutParameter(sym: Symbol.PredSym, mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = sym match {
-    case sym: Symbol.RelSym => newRelSym(sym, None, mv)
-    case sym: Symbol.LatSym => newLatSym(sym, None, mv)
-  }
-
-  /**
-    * Emits code for the given relation symbol with the given optional parameter expression `exp`.
-    */
-  private def newRelSym(sym: Symbol.RelSym, optExp: Option[FinalAst.Expression], mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = {
-    // Emit code for the name of the predicate symbol.
-    mv.visitLdcInsn(sym.toString)
-
-    // Emit code for the parameter.
-    newParam(optExp, mv)
-
-    // Emit code for the attributes.
-    newAttributesArray(root.relations(sym).attr, mv)
-
-    // Emit code to instantiate the predicate symbol.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Symbol.RelSym.toInternalName, "of", "(Ljava/lang/String;Lflix/runtime/ProxyObject;[Lflix/runtime/fixpoint/Attribute;)Lflix/runtime/fixpoint/symbol/RelSym;", false)
-  }
-
-  /**
-    * Emits code for the given lattice symbol with the given optional parameter expression `exp`.
-    */
-  private def newLatSym(sym: Symbol.LatSym, optExp: Option[FinalAst.Expression], mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = {
-    // Emit code for the name of the predicate symbol.
-    mv.visitLdcInsn(sym.toString)
-
-    // Emit code for the parameter.
-    newParam(optExp, mv)
-
-    // Emit code for the keys.
-    newAttributesArray(root.lattices(sym).attr.init, mv)
-
-    // Emit code for the value.
-    newAttribute(root.lattices(sym).attr.last, mv)
-
-    // Emit code for the lattice operations.
-    newLatticeOps(sym, mv)
-
-    // Emit code to instantiate the predicate symbol.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Symbol.LatSym.toInternalName, "of", "(Ljava/lang/String;Lflix/runtime/ProxyObject;[Lflix/runtime/fixpoint/Attribute;Lflix/runtime/fixpoint/Attribute;Lflix/runtime/fixpoint/LatticeOps;)Lflix/runtime/fixpoint/symbol/LatSym;", false)
-  }
-
-  /**
-    * Emits code for the given optional predicate parameter.
-    */
-  private def newParam(optExp: Option[FinalAst.Expression], mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = {
-    optExp match {
-      case None =>
-        mv.visitInsn(ACONST_NULL)
-      case Some(exp) =>
-        // Emit code for the expression.
-        compileExpression(exp, mv, clazz, lenv0, entryPoint)
-
-        // Box, if necessary.
-        AsmOps.boxIfPrim(JvmOps.getErasedJvmType(exp.tpe), mv)
-
-        // Emit code for the proxy object.
-        AsmOps.newProxyObject(exp.tpe, mv)
-    }
-  }
-
-  /**
-    * Emits code to instantiate an array of the given attributes `as`.
-    */
-  private def newAttributesArray(as: List[FinalAst.Attribute], mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Instantiate a new array of appropriate length.
-    compileInt(mv, as.length)
-    mv.visitTypeInsn(ANEWARRAY, JvmName.Runtime.Fixpoint.Attribute.toInternalName)
-    for ((attribute, index) <- as.zipWithIndex) {
-      // Compile each attribute and store it in the array.
-      mv.visitInsn(DUP)
-      compileInt(mv, index)
-
-      // Instantiate the attribute.
-      newAttribute(attribute, mv)
-
-      // Store the attribute in the array.
-      mv.visitInsn(AASTORE)
-    }
-  }
-
-  /**
-    * Emits code to instantiate the given attribute `a`.
-    */
-  private def newAttribute(a: FinalAst.Attribute, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // The name of the attribute.
-    mv.visitLdcInsn(a.name)
-
-    // Instantiate a fresh attribute object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Attribute.toInternalName, "of", "(Ljava/lang/String;)Lflix/runtime/fixpoint/Attribute;", false)
-  }
-
-  /**
-    * Emits code to construct a lattice operations object for the given symbol `sym`.
-    */
-  private def newLatticeOps(sym: Symbol.LatSym, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Lookup the declaration.
-    val decl = root.lattices(sym)
-    val ops = root.latticeComponents(decl.attr.last.tpe)
-
-    // The bottom object.
-    AsmOps.compileDefSymbol(ops.bot, mv)
-
-    // The equ function.
-    AsmOps.compileDefSymbol(ops.equ, mv)
-
-    // The leq function.
-    AsmOps.compileDefSymbol(ops.leq, mv)
-
-    // The lub function.
-    AsmOps.compileDefSymbol(ops.lub, mv)
-
-    // The glb function.
-    AsmOps.compileDefSymbol(ops.glb, mv)
-
-    // Instantiate a new lattice ops object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.LatticeOps.toInternalName, "of", "(Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/Function;)Lflix/runtime/fixpoint/LatticeOps;", false)
-  }
-
-  /**
-    * Compiles the given head term `t0`.
-    */
-  private def compileHeadTerm(t0: Term.Head, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = t0 match {
-    case Term.Head.QuantVar(sym, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emit code for the quantified variable.
-      newVarTermFromQuantVar(sym, mv)
-
-    case Term.Head.CapturedVar(sym, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emit code for the captured var.
-      newVarTermFromCapturedVar(sym, tpe, mv)
-
-    case Term.Head.Lit(sym, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Compile the literal term.
-      newLitTerm(sym, mv)
-
-    case Term.Head.App(sym, args, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Compile the application term.
-      newAppTerm(sym, args, mv)
-  }
-
-  /**
-    * Compiles the given body term `t0`.
-    */
-  private def compileBodyTerm(t0: Term.Body, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = t0 match {
-    case Term.Body.Wild(tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emits code for the wild card term.
-      newWildTerm(mv)
-
-    case Term.Body.QuantVar(sym, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emit code for the quantified variable.
-      newVarTermFromQuantVar(sym, mv)
-
-    case Term.Body.CapturedVar(sym, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Emit code for the captured var.
-      newVarTermFromCapturedVar(sym, tpe, mv)
-
-    case Term.Body.Lit(sym, tpe, loc) =>
-      // Add source line numbers for debugging.
-      addSourceLine(mv, loc)
-
-      // Compile the literal term.
-      newLitTerm(sym, mv)
-  }
-
-  /**
-    * Emits code for the given head `terms`.
-    */
-  private def newHeadTerms(terms: List[Term.Head], mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    compileInt(mv, terms.length)
-    mv.visitTypeInsn(ANEWARRAY, JvmName.Runtime.Fixpoint.Term.Term.toInternalName)
-    for ((term, index) <- terms.zipWithIndex) {
-      // Compile each term and store it in the array.
-      mv.visitInsn(DUP)
-      compileInt(mv, index)
-      compileHeadTerm(term, mv)
-      mv.visitInsn(AASTORE)
-    }
-  }
-
-  /**
-    * Emits code for the given body `terms`.
-    */
-  private def newBodyTerms(terms: List[Term.Body], mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    compileInt(mv, terms.length)
-    mv.visitTypeInsn(ANEWARRAY, JvmName.Runtime.Fixpoint.Term.Term.toInternalName)
-    for ((term, index) <- terms.zipWithIndex) {
-      // Compile each term and store it in the array.
-      mv.visitInsn(DUP)
-      compileInt(mv, index)
-      compileBodyTerm(term, mv)
-      mv.visitInsn(AASTORE)
-    }
-  }
-
-  /**
-    * Emits code to allocate a new wildcard term.
-    */
-  private def newWildTerm(mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Retrieve the singleton instance of the wildcard term.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Term.WildTerm.toInternalName, "getSingleton", "()Lflix/runtime/fixpoint/term/WildTerm;", false)
-  }
-
-  /**
-    * Emits code to allocate a new variable term for the given captured variable symbol `sym`.
-    */
-  private def newVarTermFromCapturedVar(sym: Symbol.VarSym, tpe: MonoType, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Read the value of the local variable and put it on the stack.
-    readVar(sym, tpe, mv)
-
-    // Box the result, if necessary.
-    AsmOps.boxIfPrim(JvmOps.getErasedJvmType(tpe), mv)
-
-    // Allocate a proxy object for the captured value.
-    AsmOps.newProxyObject(tpe, mv)
-
-    // Instantiate a fresh constant function object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.ConstantFunction.toInternalName, "of", "(Lflix/runtime/ProxyObject;)Lflix/runtime/fixpoint/ConstantFunction;", false)
-
-    // Instantiate the literal term object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Term.LitTerm.toInternalName, "of", "(Ljava/util/function/Function;)Lflix/runtime/fixpoint/term/LitTerm;", false)
-  }
-
-  /**
-    * Emits code to allocate a new variable term for the given quantified variable symbol `sym`.
-    */
-  private def newVarTermFromQuantVar(sym: Symbol.VarSym, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Compile the variable symbol.
-    newVarSym(sym, mv)
-
-    // Instantiate the variable term object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Term.VarTerm.toInternalName, "of", "(Lflix/runtime/fixpoint/symbol/VarSym;)Lflix/runtime/fixpoint/term/VarTerm;", false)
-  }
-
-  /**
-    * Emits code to allocate a new literal term for the given def symbol `sym`.
-    */
-  private def newLitTerm(sym: Symbol.DefnSym, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Emit code to construct the function object.
-    AsmOps.compileDefSymbol(sym, mv)
-
-    // Instantiate the literal term object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Term.LitTerm.toInternalName, "of", "(Ljava/util/function/Function;)Lflix/runtime/fixpoint/term/LitTerm;", false)
-  }
-
-  /**
-    * Emits code to allocate a new app term for the given symbol `sym` and arguments `args`.
-    */
-  private def newAppTerm(sym: Symbol.DefnSym, args: List[Symbol.VarSym], mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // The function object.
-    AsmOps.compileDefSymbol(sym, mv)
-
-    // The function arguments.
-    newVarSyms(args, mv)
-
-    // Instantiate a new app term object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Term.AppTerm.toInternalName, "of", "(Ljava/util/function/Function;[Lflix/runtime/fixpoint/symbol/VarSym;)Lflix/runtime/fixpoint/term/AppTerm;", false)
-  }
-
-  /**
-    * Emits code to allocate new variable symbols for the given symbols `syms`.
-    */
-  private def newVarSyms(syms: List[Symbol.VarSym], mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // The function arguments.
-    compileInt(mv, syms.length)
-    mv.visitTypeInsn(ANEWARRAY, JvmName.Runtime.Fixpoint.Symbol.VarSym.toInternalName)
-    for ((argVar, index) <- syms.zipWithIndex) {
-      // Compile each variable symbol and store it in the array.
-      mv.visitInsn(DUP)
-
-      // Compile the array index.
-      compileInt(mv, index)
-
-      // Compile the variable symbol.
-      newVarSym(argVar, mv)
-
-      // Store the variable symbol in the array.
-      mv.visitInsn(AASTORE)
-    }
-  }
-
-  /**
-    * Emits code to allocate a new variable symbol for the given symbol `sym`.
-    */
-  private def newVarSym(sym: Symbol.VarSym, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Emit the variable name.
-    mv.visitLdcInsn(sym.text)
-
-    // Emit the variable index.
-    compileInt(mv, sym.getStackOffset)
-
-    // Instantiate the variable symbol object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Fixpoint.Symbol.VarSym.toInternalName, "of", "(Ljava/lang/String;I)Lflix/runtime/fixpoint/symbol/VarSym;", false)
-  }
-
-  /**
-    * Emits code to instantiate a new stratification object.
-    */
-  private def newStratification(stf: Ast.Stratification, mv: MethodVisitor)(implicit root: Root, flix: Flix, clazz: JvmType.Reference, lenv0: Map[Symbol.LabelSym, Label], entryPoint: Label): Unit = {
-    // Instantiate a fresh stratification object.
-    mv.visitTypeInsn(NEW, JvmName.Runtime.Fixpoint.Stratification.toInternalName)
-    mv.visitInsn(DUP)
-
-    // Invoke the constructor of the stratification object.
-    mv.visitMethodInsn(INVOKESPECIAL, JvmName.Runtime.Fixpoint.Stratification.toInternalName, "<init>", "()V", false)
-
-    // Add every predicate symbol with its stratum.
-    for ((predSym, stratum) <- stf.m) {
-      mv.visitInsn(DUP)
-      newPredSymWithoutParameter(predSym, mv)
-      compileInt(mv, stratum)
-      mv.visitMethodInsn(INVOKEVIRTUAL, JvmName.Runtime.Fixpoint.Stratification.toInternalName, "setStratum", "(Lflix/runtime/fixpoint/symbol/PredSym;I)V", false)
-    }
-  }
-
-  /**
-    * Emits code to instantiate a new options object based on the flix options.
-    */
-  private def newOptions(mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Allocate a fresh object.
-    mv.visitTypeInsn(NEW, JvmName.Runtime.Fixpoint.Options.toInternalName)
-    mv.visitInsn(DUP)
-
-    // Invoke the constructor.
-    mv.visitMethodInsn(INVOKESPECIAL, JvmName.Runtime.Fixpoint.Options.toInternalName, "<init>", "()V", false)
-
-    // Monitor
-    mv.visitInsn(DUP)
-    if (flix.options.monitor) {
-      mv.visitInsn(ICONST_1)
-    } else {
-      mv.visitInsn(ICONST_0)
-    }
-    mv.visitMethodInsn(INVOKEVIRTUAL, JvmName.Runtime.Fixpoint.Options.toInternalName, "setMonitored", "(Z)V", false)
-
-    // Threads
-    mv.visitInsn(DUP)
-    mv.visitIntInsn(BIPUSH, flix.options.threads)
-    mv.visitMethodInsn(INVOKEVIRTUAL, JvmName.Runtime.Fixpoint.Options.toInternalName, "setThreads", "(I)V", false)
-
-    // Verbosity
-    mv.visitInsn(DUP)
-    if (flix.options.verbosity == Verbosity.Verbose) {
-      mv.visitInsn(ICONST_1)
-    } else {
-      mv.visitInsn(ICONST_0)
-    }
-    mv.visitMethodInsn(INVOKEVIRTUAL, JvmName.Runtime.Fixpoint.Options.toInternalName, "setVerbose", "(Z)V", false)
   }
 
   /**
@@ -2126,7 +1663,7 @@ object GenExpression {
   private def readVar(sym: Symbol.VarSym, tpe: MonoType, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
     val jvmType = JvmOps.getErasedJvmType(tpe)
     val iLOAD = AsmOps.getLoadInstruction(jvmType)
-    mv.visitVarInsn(iLOAD, sym.getStackOffset + 3) // This is `+2` because the first 2 are reserved!
+    mv.visitVarInsn(iLOAD, sym.getStackOffset + 1)
     AsmOps.castIfNotPrim(mv, JvmOps.getJvmType(tpe))
   }
 

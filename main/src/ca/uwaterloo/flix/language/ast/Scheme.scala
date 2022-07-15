@@ -17,43 +17,124 @@
 package ca.uwaterloo.flix.language.ast
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.util.tc.Show.ShowableSyntax
+import ca.uwaterloo.flix.language.fmt.{Audience, FormatScheme}
+import ca.uwaterloo.flix.language.phase.unification.{ClassEnvironment, Substitution, Unification, UnificationError}
+import ca.uwaterloo.flix.util.Validation.ToSuccess
+import ca.uwaterloo.flix.util.{InternalCompilerException, Validation}
 
 object Scheme {
 
   /**
-    * Instantiates the given type scheme `sc` by replacing all quantified variables with fresh type variables.
+    * Instantiate one of the variables in the scheme, adding new quantifiers as needed.
     */
-  def instantiate(sc: Scheme)(implicit flix: Flix): Type = refreshTypeVars(sc.quantifiers, sc.base)
+  def partiallyInstantiate(sc: Scheme, quantifier: Symbol.KindedTypeVarSym, value: Type)(implicit flix: Flix): Scheme = sc match {
+    case Scheme(quantifiers, constraints, base) =>
+      if (!quantifiers.contains(quantifier)) {
+        throw InternalCompilerException("Quantifier not in scheme.")
+      }
+      val subst = Substitution.singleton(quantifier, value)
+      val newConstraints = constraints.map(subst.apply)
+      val newBase = subst(base)
+      generalize(newConstraints, newBase)
+  }
 
   /**
-    * Replaces every free occurrence of a type variable in `typeVars`
-    * with a fresh type variable in the given type `tpe`.
+    * Instantiates the given type scheme `sc` by replacing all quantified variables with fresh type variables.
     */
-  private def refreshTypeVars(typeVars: List[Type.Var], tpe: Type)(implicit flix: Flix): Type = {
-    val freshVars = typeVars.foldLeft(Map.empty[Int, Type.Var]) {
-      case (macc, tvar) => macc + (tvar.id -> Type.freshTypeVar(tvar.kind))
+  def instantiate(sc: Scheme)(implicit flix: Flix): (List[Ast.TypeConstraint], Type) = {
+    // Compute the base type.
+    val baseType = sc.base
+
+    //
+    // Compute the fresh variables taking the instantiation mode into account.
+    //
+    val freshVars = sc.quantifiers.foldLeft(Map.empty[Int, Type.KindedVar]) {
+      case (macc, tvar) =>
+        // Determine the rigidity of the fresh type variable.
+        macc + (tvar.id -> Type.freshVar(tvar.kind, tvar.loc, tvar.isRegion, Ast.VarText.Absent))
     }
 
     /**
-      * Replaces every variable occurrence in the given type using the map `freeVars`.
+      * Replaces every variable occurrence in the given type using `freeVars`. Updates the rigidity.
       */
-    def visit(t0: Type): Type = t0 match {
-      case Type.Var(x, k) => freshVars.getOrElse(x, t0)
-      case Type.Cst(tc) => Type.Cst(tc)
-      case Type.Arrow(f, l) => Type.Arrow(f, l)
-      case Type.RecordEmpty => Type.RecordEmpty
-      case Type.RecordExtend(label, value, rest) => Type.RecordExtend(label, visit(value), visit(rest))
-      case Type.SchemaEmpty => Type.SchemaEmpty
-      case Type.SchemaExtend(sym, t, rest) => Type.SchemaExtend(sym, visit(t), visit(rest))
-      case Type.Zero => Type.Zero
-      case Type.Succ(n, t) => Type.Succ(n, t)
-      case Type.Apply(tpe1, tpe2) => Type.Apply(visit(tpe1), visit(tpe2))
-      case Type.Relation(sym, attr, kind) => Type.Relation(sym, attr map visit, kind)
-      case Type.Lattice(sym, attr, kind) => Type.Lattice(sym, attr map visit, kind)
+    def visitTvar(t: Type.KindedVar): Type.KindedVar = t match {
+      case Type.KindedVar(sym, loc) =>
+        freshVars.get(sym.id) match {
+          case None =>
+            // Determine the rigidity of the free type variable.
+            Type.KindedVar(sym, loc)
+          case Some(tvar) => tvar
+        }
     }
 
-    visit(tpe)
+    val newBase = baseType.map(visitTvar)
+
+    val newConstrs = sc.constraints.map {
+      case Ast.TypeConstraint(head, tpe0, loc) =>
+        val tpe = tpe0.map(visitTvar)
+        Ast.TypeConstraint(head, tpe, loc)
+    }
+
+    (newConstrs, newBase)
+  }
+
+  /**
+    * Generalizes the given type `tpe0` with respect to the empty type environment.
+    */
+  def generalize(tconstrs: List[Ast.TypeConstraint], tpe0: Type): Scheme = {
+    val quantifiers = tpe0.typeVars ++ tconstrs.flatMap(tconstr => tconstr.arg.typeVars)
+    Scheme(quantifiers.toList.map(_.sym), tconstrs, tpe0)
+  }
+
+  /**
+    * Returns `true` if the given schemes are equivalent.
+    */
+  // TODO can optimize?
+  def equal(sc1: Scheme, sc2: Scheme, classEnv: Map[Symbol.ClassSym, Ast.ClassContext])(implicit flix: Flix): Boolean = {
+    lessThanEqual(sc1, sc2, classEnv) && lessThanEqual(sc2, sc1, classEnv)
+  }
+
+  /**
+    * Returns `true` if the given scheme `sc1` is smaller or equal to the given scheme `sc2`.
+    */
+  def lessThanEqual(sc1: Scheme, sc2: Scheme, classEnv: Map[Symbol.ClassSym, Ast.ClassContext])(implicit flix: Flix): Boolean = {
+    checkLessThanEqual(sc1, sc2, classEnv) match {
+      case Validation.Success(_) => true
+      case Validation.Failure(_) => false
+    }
+  }
+
+  /**
+    * Returns `Success` if the given scheme `sc1` is smaller or equal to the given scheme `sc2`.
+    */
+  def checkLessThanEqual(sc1: Scheme, sc2: Scheme, classEnv: Map[Symbol.ClassSym, Ast.ClassContext])(implicit flix: Flix): Validation[Substitution, UnificationError] = {
+
+    ///
+    /// Special Case: If `sc1` and `sc2` are syntactically the same then `sc1` must be less than or equal to `sc2`.
+    ///
+    if (sc1 == sc2) {
+      return Substitution.empty.toSuccess
+    }
+
+    //
+    // General Case: Compute if `sc1` <= `sc2`.
+    //
+
+    // Mark every free variable in `sc1` as rigid.
+    val renv1 = RigidityEnv(sc1.base.typeVars.map(_.sym) -- sc1.quantifiers)
+
+    // Mark every free and bound variable in `sc2` as rigid.
+    val renv2 = RigidityEnv(sc2.base.typeVars.map(_.sym))
+
+    val renv = renv1 ++ renv2
+
+    // Attempt to unify the two instantiated types.
+    for {
+      subst <- Unification.unifyTypes(sc1.base, sc2.base, renv).toValidation
+      newTconstrs1 <- ClassEnvironment.reduce(sc1.constraints.map(subst.apply), classEnv)
+      newTconstrs2 <- ClassEnvironment.reduce(sc2.constraints.map(subst.apply), classEnv)
+      _ <- Validation.sequence(newTconstrs1.map(ClassEnvironment.entail(newTconstrs2, _, classEnv)))
+    } yield subst
   }
 
 }
@@ -61,11 +142,13 @@ object Scheme {
 /**
   * Representation of polytypes.
   */
-case class Scheme(quantifiers: List[Type.Var], base: Type) {
+case class Scheme(quantifiers: List[Symbol.KindedTypeVarSym], constraints: List[Ast.TypeConstraint], base: Type) {
 
   /**
     * Returns a human readable representation of the polytype.
     */
-  override def toString: String = s"∀(${quantifiers.mkString(", ")}). ${base.show}"
+  override def toString: String = {
+    FormatScheme.formatScheme(this)(Audience.Internal)
+  }
 
 }

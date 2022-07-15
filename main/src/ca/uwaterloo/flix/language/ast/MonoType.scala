@@ -58,6 +58,8 @@ object MonoType {
 
   case class Channel(tpe: MonoType) extends MonoType
 
+  case class Lazy(tpe: MonoType) extends MonoType
+
   case class Ref(tpe: MonoType) extends MonoType
 
   case class Tuple(elms: List[MonoType]) extends MonoType
@@ -68,15 +70,15 @@ object MonoType {
 
   case class RecordEmpty() extends MonoType
 
-  case class RecordExtend(label: String, value: MonoType, rest: MonoType) extends MonoType
+  case class RecordExtend(field: String, value: MonoType, rest: MonoType) extends MonoType
 
   case class SchemaEmpty() extends MonoType
 
-  case class SchemaExtend(sym: Symbol.PredSym, tpe: MonoType, rest: MonoType) extends MonoType
+  case class SchemaExtend(name: String, tpe: MonoType, rest: MonoType) extends MonoType
 
-  case class Relation(sym: Symbol.RelSym, attr: List[MonoType]) extends MonoType
+  case class Relation(tpes: List[MonoType]) extends MonoType
 
-  case class Lattice(sym: Symbol.LatSym, attr: List[MonoType]) extends MonoType
+  case class Lattice(tpes: List[MonoType]) extends MonoType
 
   case class Native(clazz: Class[_]) extends MonoType
 

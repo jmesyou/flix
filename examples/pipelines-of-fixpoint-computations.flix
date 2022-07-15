@@ -1,9 +1,4 @@
-// Declare three predicate symbols.
-rel ColorEdge(x: Int, c: Str, y: Int)
-rel ColorPath(x: Int, c: Str, y: Int)
-rel ColorlessPath(x: Int, y: Int)
-
-def main(): Bool =
+def main(): Unit & Impure =
     // Introduce some facts for colored paths.
     let f1 = #{
         ColorEdge(1, "blue", 2).
@@ -25,4 +20,7 @@ def main(): Bool =
     let m2 = solve (m1 <+> r2);
 
     // Check that there is a path from 1 to 3.
-    m2 |= ColorlessPath(1, 3).
+    let exists = (query m2 select true from ColorlessPath(1, 3) |> List.length) != 0;
+
+    // Print a result.
+    println(if (exists) "Path exists!" else "Path does not exist!")

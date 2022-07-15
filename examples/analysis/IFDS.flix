@@ -1,29 +1,27 @@
-namespace IFDS {
+// Inputs
+rel EshIntra(node: String, factin: String, factout: String)
+rel EshCallStart(node: String, factin: String, proc: String, factout: String)
+rel EshEndReturn(proc: String, factin: String, node: String, factout: String)
 
-    // Inputs
-    rel EshIntra(node: Str, factin: Str, factout: Str)
-    rel EshCallStart(node: Str, factin: Str, proc: Str, factout: Str)
-    rel EshEndReturn(proc: Str, factin: Str, node: Str, factout: Str)
+// Call-to-Return edges should be included above in EshIntra
+rel CFG(from: String, to: String)
+rel CallGraph(site: String, proc: String)
+rel StartNode(proc: String, node: String) // TODO: should really be a function
+rel EndNode(proc: String, node: String)
 
-    // Call-to-Return edges should be included above in EshIntra
-    rel CFG(from: Str, to: Str)
-    rel CallGraph(site: Str, proc: Str)
-    rel StartNode(proc: Str, node: Str) // TODO: should really be a function
-    rel EndNode(proc: Str, node: Str)
+// Internal lattices
+rel PathEdge(factin: String, node: String, fact: String)
+rel SummaryEdge(node: String, factin: String, factout: String)
 
-    // Internal lattices
-    rel PathEdge(factin: Str, node: Str, fact: Str)
-    rel SummaryEdge(node: Str, factin: Str, factout: Str)
+// Output
+rel Results(node: String, fact: String)
 
-    // Output
-    rel Results(node: Str, fact: Str)
+rel Facts(fact: String)
+rel Id(node: String)
 
-    rel Facts(fact: Str)
-    rel Identity(node: Str)
-
-    // Rules
-    @test
-    def test(): #{ EshIntra, EshCallStart, EshEndReturn, CFG, CallGraph, StartNode, EndNode, PathEdge, SummaryEdge, Results, Facts, Identity } = solve #{
+// Rules
+def main(): Unit & Impure =
+    let p = #{
         // intraproc
         PathEdge(d1,m,d3) :-
             PathEdge(d1,n,d2),
@@ -38,7 +36,7 @@ namespace IFDS {
 
         // call-to-start
         PathEdge(d3,start,d3) :-
-            PathEdge(d1,call,d2),
+            PathEdge(_d1,call,d2),
             CallGraph(call,target),
             EshCallStart(call,d2,target,d3),
             StartNode(target,start).
@@ -46,7 +44,7 @@ namespace IFDS {
         // compute summary
         SummaryEdge(call, d4, d5s) :-
             CallGraph(call,target),
-            StartNode(target,start),
+            StartNode(target,_start),
             EndNode(target,end),
             EshCallStart(call,d4,target,d1),
             PathEdge(d1,end,d2),
@@ -87,14 +85,14 @@ namespace IFDS {
         EshIntra("n1","g","g").
         EshIntra("n2","x","x").
 
-        Identity("n3").
-        Identity("sp").
-        Identity("n4").
-        Identity("n6").
-        Identity("n8").
-        Identity("n9").
+        Id("n3").
+        Id("sp").
+        Id("n4").
+        Id("n6").
+        Id("n8").
+        Id("n9").
 
-        EshIntra(idnode,f,f) :- Facts(f), Identity(idnode).
+        EshIntra(idnode,f,f) :- Facts(f), Id(idnode).
         EshIntra("n5","a","a").
         EshIntra("n6","g","a").
         EshIntra("n7","a","a").
@@ -112,7 +110,7 @@ namespace IFDS {
 
         // Entrypoint
         PathEdge("zero","smain","zero").
-
-    }
-
-}
+    };
+    let m = solve p;
+    Fixpoint.unsafePrint(m);
+    ()

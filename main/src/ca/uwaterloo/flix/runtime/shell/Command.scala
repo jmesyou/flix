@@ -31,89 +31,14 @@ object Command {
   case object Nop extends Command
 
   /**
-    * Evaluates the given expression `exp`.
-    */
-  case class Eval(exp: String) extends Command
-
-  /**
-    * Shows the type of the given expression `exp`.
-    */
-  case class TypeOf(exp: String) extends Command
-
-  /**
-    * Shows the kind of the given expression `exp`.
-    */
-  case class KindOf(exp: String) extends Command
-
-  /**
-    * Shows the effect of the given expression `exp`.
-    */
-  case class EffectOf(exp: String) extends Command
-
-  /**
-    * Shows the context for the given hole `fqn`.
-    */
-  case class Hole(fqnOpt: Option[String]) extends Command
-
-  /**
-    * Shows the definitions, relations, and lattices in the given namespace.
-    */
-  case class Browse(ns: Option[String]) extends Command
-
-  /**
-    * Show the documentation for the given fully-qualified name.
-    */
-  case class Doc(fqn: String) extends Command
-
-  /**
-    * Searches for a definition symbol which contains `needle` as part of its name.
-    */
-  case class Search(needle: String) extends Command
-
-  /**
-    * Adds the given `path` to the set of source paths.
-    */
-  case class Load(path: String) extends Command
-
-  /**
-    * Removes the given `path` from the set of source paths.
-    */
-  case class Unload(path: String) extends Command
-
-  /**
     * Reloads all source paths.
     */
   case object Reload extends Command
 
   /**
-    * Runs all benchmarks in the program.
+    * Displays documentation about the fqn s
     */
-  case object Benchmark extends Command
-
-  /**
-    * Runs all unit tests in the program.
-    */
-  case object Test extends Command
-
-  /**
-    * Verifies all properties in the program.
-    */
-  case object Verify extends Command
-
-  /**
-    * Warms up the compiler.
-    */
-  case object Warmup extends Command
-
-  /**
-    * Watches source paths for changes.
-    */
-  case object Watch extends Command
-
-  /**
-    * Unwatches source paths for changes.
-    */
-  case object Unwatch extends Command
+  case class Doc(s: String) extends Command
 
   /**
     * Terminates the shell.
@@ -129,6 +54,11 @@ object Command {
     * Praise Le Toucan.
     */
   case object Praise extends Command
+
+  /**
+    * Eval source code.
+    */
+  case class Eval(s: String) extends Command
 
   /**
     * Unknown command.
@@ -152,152 +82,19 @@ object Command {
       return Command.Nop
 
     //
-    // Type
-    //
-    if (input.startsWith(":type ")) {
-      val exp = input.substring(":type ".length).trim
-      return Command.TypeOf(exp)
-    }
-    if (input.startsWith(":t ")) {
-      val exp = input.substring(":t ".length).trim
-      return Command.TypeOf(exp)
-    }
-
-    //
-    // Kind
-    //
-    if (input.startsWith(":kind ")) {
-      val exp = input.substring(":kind ".length).trim
-      return Command.TypeOf(exp)
-    }
-    if (input.startsWith(":k ")) {
-      val exp = input.substring(":k ".length).trim
-      return Command.KindOf(exp)
-    }
-
-    //
-    // Effect
-    //
-    if (input.startsWith(":effect ")) {
-      val exp = input.substring(":effect ".length).trim
-      return Command.EffectOf(exp)
-    }
-    if (input.startsWith(":e ")) {
-      val exp = input.substring(":e ".length).trim
-      return Command.EffectOf(exp)
-    }
-
-    //
-    // Hole
-    //
-    if (input.startsWith(":hole")) {
-      val fqn = input.substring(":hole".length).trim
-      if (fqn.isEmpty)
-        return Command.Hole(None)
-      else
-        return Command.Hole(Some(fqn))
-    }
-
-    //
-    // Browse
-    //
-    if (input.startsWith(":browse")) {
-      if (input.trim == ":browse") {
-        return Command.Browse(None)
-      }
-      val ns = input.substring(":browse".length).trim
-      return Command.Browse(Some(ns))
-    }
-
-    //
-    // Doc
-    //
-    if (input.startsWith(":doc ")) {
-      val fqn = input.substring(":doc ".length).trim
-      if (fqn.isEmpty) {
-        terminal.writer().println("Missing argument for command :doc.")
-        return Command.Nop
-      }
-      return Command.Doc(fqn)
-    }
-
-    //
-    // Search
-    //
-    if (input.startsWith(":search ")) {
-      val needle = input.substring(":search ".length).trim
-      if (needle.isEmpty) {
-        terminal.writer().println("Missing argument for command :search.")
-        return Command.Nop
-      }
-      return Command.Search(needle)
-    }
-
-    //
-    // Load
-    //
-    if (input.startsWith(":load ")) {
-      val path = input.substring(":load ".length).trim
-      if (path.isEmpty) {
-        terminal.writer().println("Missing argument for command :load.")
-        return Command.Nop
-      }
-      return Command.Load(path)
-    }
-
-    //
-    // Unload
-    //
-    if (input.startsWith(":unload ")) {
-      val path = input.substring(":unload ".length).trim
-      if (path.isEmpty) {
-        terminal.writer().println("Missing argument for command :unload.")
-        return Command.Nop
-      }
-      return Command.Unload(path)
-    }
-
-    //
     // Reload
     //
     if (input == ":r" || input == ":reload")
       return Command.Reload
 
     //
-    // Benchmark
+    // Doc
     //
-    if (input == ":benchmark")
-      return Command.Benchmark
-
-    //
-    // Verify
-    //
-    if (input == ":verify")
-      return Command.Verify
-
-    //
-    // Test
-    //
-    if (input == ":test")
-      return Command.Test
-
-    //
-    // Warmup
-    //
-    if (input == ":warmup")
-      return Command.Warmup
-
-    //
-    // Watch
-    //
-    if (input == ":watch" || input == ":w")
-      return Command.Watch
-
-    //
-    // Unwatch
-    //
-    if (input == ":unwatch")
-      return Command.Unwatch
+    val docPattern = raw":d(oc)?\s+(\S+).*".r
+    input match {
+      case docPattern(_, s) => return Command.Doc(s)
+      case _ => // no-op
+    }
 
     //
     // Quit
@@ -318,15 +115,12 @@ object Command {
       return Command.Praise
 
     //
-    // Unknown
+    // Eval or Unknown?
     //
     if (input.startsWith(":"))
-      return Command.Unknown(input)
-
-    //
-    // Eval
-    //
-    Command.Eval(input)
+      Command.Unknown(input)
+    else
+      Command.Eval(input)
   }
 
 }

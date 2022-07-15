@@ -14,65 +14,133 @@
  * limitations under the License.
  */
 
+instance LowerBound[Char] {
+    pub def minValue(): Char = '\u0000'
+}
+
+instance UpperBound[Char] {
+    pub def maxValue(): Char = '\uffff'
+}
+
 namespace Char {
 
     ///
     ///  Returns `true` if the given char `c` is an ascii character.
     ///
-    pub def isAscii(c: Char): Bool = native method flix.runtime.library.Char.isAscii(c) as Bool
+    @Time(1) @Space(1)
+    pub def isAscii(c: Char): Bool = match toInt32(c) {
+        case i if i >= 0x0000 and i <= 0x007F => true        // 'NUL'..'DEL'
+        case _ => false
+    }
 
     ///
     /// Returns `true` if the given char `c` is a letter character.
     ///
-    pub def isLetter(c: Char): Bool = native method flix.runtime.library.Char.isLetter(c) as Bool
+    @Time(1) @Space(1)
+    pub def isLetter(c: Char): Bool =
+        import static java.lang.Character.isLetter(Char): Bool & Pure;
+        isLetter(c)
 
     ///
-    /// Returns `true` if the given char `c` is in the range 0...9.
+    /// Returns `true` if the given char `c` is a recognized Unicode digit.
+    /// This includes the ASCII range 0..9 but also Arabic-Indic digits, Devagari digits and Fullwidth digits.
     ///
-    pub def isDigit(c: Char): Bool = native method flix.runtime.library.Char.isDigit(c) as Bool
+    @Time(1) @Space(1)
+    pub def isDigit(c: Char): Bool =
+        import static java.lang.Character.isDigit(Char): Bool & Pure;
+        isDigit(c)
+
+    ///
+    /// Returns `true` if the given char `c` is strictly in the range of ASCII digits 0...9.
+    ///
+    @Time(1) @Space(1)
+    pub def isAsciiDigit(c: Char): Bool = match toInt32(c) {
+        case i if i >= 0x0030 and i <= 0x0039 => true        // '0'..'9'
+        case _ => false
+    }
 
     ///
     /// Returns `true` if the given char `c` is in the range 0...7.
     ///
-    pub def isOctDigit(c: Char): Bool = native method flix.runtime.library.Char.isOctDigit(c) as Bool
+    @Time(1) @Space(1)
+    pub def isOctDigit(c: Char): Bool = match toInt32(c) {
+        case i if i >= 0x0030 and i <= 0x0037 => true        // '0'..'7'
+        case _ => false
+    }
 
     ///
     /// Returns `true` if the given char `c` is in the range 0...F.
     ///
-    pub def isHexDigit(c: Char): Bool = native method flix.runtime.library.Char.isHexDigit(c) as Bool
+    @Time(1) @Space(1)
+    pub def isHexDigit(c: Char): Bool = match toInt32(c) {
+        case i if i >= 0x0030 and i <= 0x0039 => true        // '0'..'9'
+        case i if i >= 0x0041 and i <= 0x0046 => true        // 'A'..'F'
+        case i if i >= 0x0061 and i <= 0x0066 => true        // 'a'..'f'
+        case _ => false
+    }
 
     ///
     /// Returns `true` if the given char `c` is lowercase.
     ///
-    pub def isLowerCase(c: Char): Bool = native method flix.runtime.library.Char.isLowerCase(c) as Bool
+    @Time(1) @Space(1)
+    pub def isLowerCase(c: Char): Bool =
+        import static java.lang.Character.isLowerCase(Char): Bool & Pure;
+        isLowerCase(c)
 
     ///
     /// Returns `true` if the given char `c` is uppercase.
     ///
-    pub def isUpperCase(c: Char): Bool = native method flix.runtime.library.Char.isUpperCase(c) as Bool
+    @Time(1) @Space(1)
+    pub def isUpperCase(c: Char): Bool =
+        import static java.lang.Character.isUpperCase(Char): Bool & Pure;
+        isUpperCase(c)
 
     ///
     /// Returns `true` if the given char `c` is a white space character.
     ///
-    pub def isWhiteSpace(c: Char): Bool = native method flix.runtime.library.Char.isWhiteSpace(c) as Bool
+    @Time(1) @Space(1)
+    pub def isWhiteSpace(c: Char): Bool =
+        import static java.lang.Character.isWhitespace(Char): Bool & Pure;
+        isWhitespace(c)
 
     ///
     /// Converts a letter to its lowercase version.
     ///
     /// Returns the original character if it does not have a lowercase version.
     ///
-    pub def toLowerCase(c: Char): Char = native method flix.runtime.library.Char.toLowerCase(c) as Char
+    @Time(1) @Space(1)
+    pub def toLowerCase(c: Char): Char =
+        import static java.lang.Character.toLowerCase(Char): Char & Pure;
+        toLowerCase(c)
 
     ///
     /// Converts a letter to its uppercase version.
     ///
     /// Returns the original character if it does not have a uppercase version.
     ///
-    pub def toUpperCase(c: Char): Char = native method flix.runtime.library.Char.toUpperCase(c) as Char
+    @Time(1) @Space(1)
+    pub def toUpperCase(c: Char): Char =
+        import static java.lang.Character.toUpperCase(Char): Char & Pure;
+        toUpperCase(c)
 
     ///
     /// Returns the character `c` as a string.
     ///
-    pub def toString(c: Char): Str = native method flix.runtime.library.Char.toString(c) as Str
+    @Time(1) @Space(1)
+    pub def toString(c: Char): String = ToString.toString(c)
+
+    ///
+    /// Returns the character `c` as an Int32.
+    ///
+    @Time(1) @Space(1)
+    pub def toInt32(c: Char): Int32 =
+        c as Int32
+
+    ///
+    /// Returns the respective character for the int `i`.
+    ///
+    @Time(1) @Space(1)
+    pub def fromInt32(i: Int32): Char =
+        i as Char
 
 }

@@ -16,6 +16,7 @@
 
 package ca.uwaterloo.flix
 
+import ca.uwaterloo.flix.util.LibLevel
 import org.scalatest.FunSuite
 
 class TestMain extends FunSuite {
@@ -56,6 +57,18 @@ class TestMain extends FunSuite {
     assert(opts.command == Main.Command.Test)
   }
 
+  test("repl") {
+    val args = Array("repl")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.command == Main.Command.Repl)
+  }
+
+  test("--args --abc --def") {
+    val args = Array("--args", "--abc --def")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.args.contains("--abc --def"))
+  }
+
   test("--benchmark") {
     val args = Array("--benchmark", "p.flix")
     val opts = Main.parseCmdOpts(args).get
@@ -68,10 +81,23 @@ class TestMain extends FunSuite {
     assert(opts.documentor)
   }
 
-  test("--interactive") {
-    val args = Array("--interactive", "p.flix")
+  test("--explain foo") {
+    val args = Array("--explain", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.interactive)
+    assert(opts.explain)
+  }
+
+
+  test("--entrypoint foo") {
+    val args = Array("--entrypoint", "foo", "p.flix")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.entryPoint.nonEmpty)
+  }
+
+  test("--json") {
+    val args = Array("--json")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.json)
   }
 
   test("--listen") {
@@ -80,22 +106,16 @@ class TestMain extends FunSuite {
     assert(opts.listen.nonEmpty)
   }
 
-  test("--monitor") {
-    val args = Array("--monitor", "p.flix")
+  test("--lsp") {
+    val args = Array("--lsp", "8080", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.monitor)
+    assert(opts.lsp.nonEmpty)
   }
 
-  test("--quickchecker") {
-    val args = Array("--quickchecker")
+  test("--output build") {
+    val args = Array("--output", "build", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.quickchecker)
-  }
-
-  test("--release") {
-    val args = Array("--release", "p.flix")
-    val opts = Main.parseCmdOpts(args).get
-    assert(opts.release)
+    assert(opts.output.contains("build"))
   }
 
   test("--test") {
@@ -104,22 +124,16 @@ class TestMain extends FunSuite {
     assert(opts.test)
   }
 
-  test("--verbose") {
-    val args = Array("--verbose", "p.flix")
+  test("--threads") {
+    val args = Array("--threads", "42", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.verbose)
+    assert(opts.threads.contains(42))
   }
 
-  test("--verifier") {
-    val args = Array("--verifier", "p.flix")
+  test("--Xbenchmark-code-size") {
+    val args = Array("--Xbenchmark-code-size", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.verifier)
-  }
-
-  test("--Xallow-redundancies") {
-    val args = Array("--Xallow-redundancies", "p.flix")
-    val opts = Main.parseCmdOpts(args).get
-    assert(opts.xallowredundancies)
+    assert(opts.xbenchmarkCodeSize)
   }
 
   test("--Xbenchmark-phases") {
@@ -134,40 +148,46 @@ class TestMain extends FunSuite {
     assert(opts.xbenchmarkThroughput)
   }
 
-  test("--Xcore") {
-    val args = Array("--Xcore", "p.flix")
-    val opts = Main.parseCmdOpts(args).get
-    assert(opts.xcore)
-  }
-
   test("--Xdebug") {
     val args = Array("--Xdebug", "p.flix")
     val opts = Main.parseCmdOpts(args).get
     assert(opts.xdebug)
   }
 
-  test("--Xinterpreter") {
-    val args = Array("--Xinterpreter", "p.flix")
+  test("--Xlib nix") {
+    val args = Array("--Xlib", "nix", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.xinterpreter)
+    assert(opts.xlib == LibLevel.Nix)
   }
 
-  test("--Xinvariants") {
-    val args = Array("--Xinvariants", "p.flix")
+  test("--Xlib min") {
+    val args = Array("--Xlib", "min", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.xinvariants)
+    assert(opts.xlib == LibLevel.Min)
   }
 
-  test("--Xno-stratifier") {
-    val args = Array("--Xno-stratifier", "p.flix")
+  test("--Xlib all") {
+    val args = Array("--Xlib", "all", "p.flix")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.xnostratifier)
+    assert(opts.xlib == LibLevel.All)
   }
 
-  test("--Xno-tailcalls") {
-    val args = Array("--Xno-tailcalls", "p.flix")
+  test("--Xno-bool-table") {
+    val args = Array("--Xno-bool-table")
     val opts = Main.parseCmdOpts(args).get
-    assert(opts.xnotailcalls)
+    assert(opts.xnobooltable)
+  }
+
+  test("--Xstrictmono") {
+    val args = Array("--Xstrictmono")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.xstrictmono)
+  }
+
+  test("--explain") {
+    val args = Array("--explain")
+    val opts = Main.parseCmdOpts(args).get
+    assert(opts.explain)
   }
 
 }

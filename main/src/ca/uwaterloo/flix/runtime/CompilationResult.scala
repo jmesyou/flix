@@ -16,18 +16,21 @@
 
 package ca.uwaterloo.flix.runtime
 
-import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.FinalAst._
+import ca.uwaterloo.flix.language.ast.ErasedAst._
 import ca.uwaterloo.flix.language.ast._
-import flix.runtime.ProxyObject
 
 /**
   * A class representing the result of a compilation.
   *
-  * @param root the abstract syntax tree of the program.
-  * @param defs the definitions in the program.
+  * @param root     the abstract syntax tree of the program.
+  * @param defs     the definitions in the program.
+  * @param codeSize the number of bytes the compiler generated.
   */
-class CompilationResult(root: Root, defs: Map[Symbol.DefnSym, () => ProxyObject])(implicit flix: Flix) {
+class CompilationResult(root: Root,
+                        main: Option[Array[String] => Unit],
+                        defs: Map[Symbol.DefnSym, () => AnyRef],
+                        val totalTime: Long,
+                        val codeSize: Int) {
 
   /**
     * Returns the root AST.
@@ -37,7 +40,7 @@ class CompilationResult(root: Root, defs: Map[Symbol.DefnSym, () => ProxyObject]
   /**
     * Optionally returns the main function.
     */
-  def getMain: Option[() => AnyRef] = defs.get(Symbol.mkDefnSym("main"))
+  def getMain: Option[Array[String] => Unit] = main
 
   /**
     * Returns all the benchmark functions in the program.
@@ -58,58 +61,10 @@ class CompilationResult(root: Root, defs: Map[Symbol.DefnSym, () => ProxyObject]
   }
 
   /**
-    * Immediately evaluates the given fully-qualified name `fqn`.
-    *
-    * Returns the raw result.
-    */
-  def eval(fqn: String): AnyRef = {
-    // Construct the definition symbol.
-    val sym = Symbol.mkDefnSym(fqn)
-
-    // Retrieve the function and call it.
-    defs.get(sym) match {
-      case None => throw new IllegalArgumentException(s"Undefined fully-qualified name: '$fqn'.")
-      case Some(fn) => fn().getValue
-    }
-  }
-
-  /**
-    * Immediately evaluates the given fully-qualified name `fqn`.
-    *
-    * Returns a string representation of the result.
-    */
-  def evalToString(fqn: String): String = {
-    // Construct the definition symbol.
-    val sym = Symbol.mkDefnSym(fqn)
-
-    // Retrieve the definition.
-    root.defs.get(sym) match {
-      case None => throw new IllegalArgumentException(s"Undefined fully-qualified name: '$fqn'.")
-      case Some(defn) =>
-        // Retrieve the function and call it.
-        val resultValue = defs(sym)()
-
-        resultValue.toString
-    }
-  }
-
-  /**
     * Returns the total number of lines of compiled code.
     */
-  def getTotalLines(): Int = getRoot.sources.foldLeft(0) {
+  def getTotalLines: Int = getRoot.sources.foldLeft(0) {
     case (acc, (_, sl)) => acc + sl.endLine
   }
-
-  /**
-    * Returns the total compilation time in nanoseconds.
-    */
-  def getTotalTime(): Long = flix.phaseTimers.foldLeft(0L) {
-    case (acc, phase) => acc + phase.time
-  }
-
-  /**
-    * Returns the result type of the given lambda type.
-    */
-  private def getResultType(tpe: Type): Type = tpe.typeArguments.last
 
 }

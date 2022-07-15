@@ -1,26 +1,30 @@
+/*
+ * Copyright 2020 Magnus Madsen
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /////////////////////////////////////////////////////////////////////////////
 // identity                                                                //
 /////////////////////////////////////////////////////////////////////////////
 @test
-def identity01(): Bool = identity(5) `assertEq!` 5
+def identity01(): Bool = identity(5) == 5
 
 @test
-def identity02(): Bool = identity(true) `assertEq!` true
+def identity02(): Bool = identity(true) == true
 
 @test
-def identity03(): Bool = identity(6ii) `assertEq!` 6ii
-
-/////////////////////////////////////////////////////////////////////////////
-// constant                                                                //
-/////////////////////////////////////////////////////////////////////////////
-@test
-def constant01(): Bool = (true |> constant(5)) `assertEq!` 5
-
-@test
-def constant02(): Bool = (5 |> constant(true)) `assertEq!` true
-
-@test
-def constant03(): Bool = (Nil |> constant(2ii)) `assertEq!` 2ii
+def identity03(): Bool = identity(6ii) == 6ii
 
 /////////////////////////////////////////////////////////////////////////////
 // flip                                                                    //
@@ -28,95 +32,49 @@ def constant03(): Bool = (Nil |> constant(2ii)) `assertEq!` 2ii
 @test
 def flip01(): Bool =
     let f = flip((x, y) -> x - y);
-    f(5, 4) `assertEq!` -1
+    f(5, 4) == -1
 
 @test
 def flip02(): Bool =
     let f = flip((x, y) -> x - y);
-    f(4, 5) `assertEq!` 1
+    f(4, 5) == 1
 
 @test
 def flip03(): Bool =
     let f = flip((x, y) -> x / y);
-    f(10, 3) `assertEq!` 0
+    f(10, 3) == 0
 
 @test
 def flip04(): Bool =
     let f = flip((x, y) -> x / y);
-    f(3, 10) `assertEq!` 3
-
-/////////////////////////////////////////////////////////////////////////////
-// curry                                                                   //
-/////////////////////////////////////////////////////////////////////////////
-@test
-def curry01(): Bool =
-    let f = curry((x, y) -> x - y);
-    (4 |> f(5)) `assertEq!` 1
-
-@test
-def curry02(): Bool =
-    let f = curry((x, y) -> x - y);
-    (5 |> f(4)) `assertEq!` -1
-
-@test
-def curry03(): Bool =
-    let f = curry((x, y) -> x / y);
-    (3 |> f(10)) `assertEq!` 3
-
-@test
-def curry04(): Bool =
-    let f = curry((x, y) -> x / y);
-    (10 |> f(3)) `assertEq!` 0
-
-/////////////////////////////////////////////////////////////////////////////
-// uncurry                                                                 //
-/////////////////////////////////////////////////////////////////////////////
-@test
-def uncurry01(): Bool =
-    let f = uncurry(x -> y -> x - y);
-    f(5, 4) `assertEq!` 1
-
-@test
-def uncurry02(): Bool =
-    let f = uncurry(x -> y -> x - y);
-    f(4, 5) `assertEq!` -1
-
-@test
-def uncurry03(): Bool =
-    let f = uncurry(x -> y -> x / y);
-    f(10, 3) `assertEq!` 3
-
-@test
-def uncurry04(): Bool =
-    let f = uncurry(x -> y -> x / y);
-    f(3, 10) `assertEq!` 0
+    f(3, 10) == 3
 
 /////////////////////////////////////////////////////////////////////////////
 // fst                                                                     //
 /////////////////////////////////////////////////////////////////////////////
 @test
-def fst01(): Bool = fst((5, 0.0f32)) `assertEq!` 5
+def fst01(): Bool = fst((5, 0.0f32)) == 5
 
 @test
-def fst02(): Bool = fst((0.0f32, 5)) `assertEq!` 0.0f32
+def fst02(): Bool = fst((0.0f32, 5)) == 0.0f32
 
 /////////////////////////////////////////////////////////////////////////////
 // snd                                                                     //
 /////////////////////////////////////////////////////////////////////////////
 @test
-def snd01(): Bool = snd((5, 0.0f32)) `assertEq!` 0.0f32
+def snd01(): Bool = snd((5, 0.0f32)) == 0.0f32
 
 @test
-def snd02(): Bool = snd((0.0f32, 5)) `assertEq!` 5
+def snd02(): Bool = snd((0.0f32, 5)) == 5
 
 /////////////////////////////////////////////////////////////////////////////
 // swap                                                                    //
 /////////////////////////////////////////////////////////////////////////////
 @test
-def swap01(): Bool = swap((5, 0.0f32)) `assertEq!` (0.0f32, 5)
+def swap01(): Bool = swap((5, 0.0f32)) == (0.0f32, 5)
 
 @test
-def swap02(): Bool = swap((0.0f32, 5)) `assertEq!` (5, 0.0f32)
+def swap02(): Bool = swap((0.0f32, 5)) == (5, 0.0f32)
 
 /////////////////////////////////////////////////////////////////////////////
 // Function Composition                                                    //
@@ -126,127 +84,71 @@ def forwardComposition01(): Bool =
     let f = x -> x + 1;
     let g = x -> x * 2;
     let h = f >> g;
-        h(0) `assertEq!` 2 // (0 + 1) * 2
-
-@test
-def backwardComposition01(): Bool =
-    let f = x -> x + 1;
-    let g = x -> x * 2;
-    let h = f << g;
-        h(0) `assertEq!` 1 // (0 * 2) + 1
+        h(0) == 2 // (0 + 1) * 2
 
 @test
 def forwardPipe01(): Bool =
     let f = x -> x + 1;
     let g = x -> x * 2;
     let r = 0 |> f |> g;
-        r `assertEq!` 2 // (0 + 1) * 2
+        r == 2 // (0 + 1) * 2
 
 @test
 def forwardPipe02(): Bool =
     let f = match (x, y) -> x + y;
     let r = (1, 2) |> f;
-        r `assertEq!` 3
-
-@test
-def backwardPipe01(): Bool =
-    let f = x -> x + 1;
-    let g = x -> x * 2;
-    let r = f <| (g <| 0);
-        r `assertEq!` 1 // (0 * 2) + 1
-
-@test
-def backwardPipe02(): Bool =
-    let f = match (x, y) -> x + y;
-    let r = f <| (1, 2);
-        r `assertEq!` 3
+        r == 3
 
 /////////////////////////////////////////////////////////////////////////////
-// Logical And                                                             //
+// ||> (doublePipe)                                                    //
 /////////////////////////////////////////////////////////////////////////////
-@test
-def mathAnd01(): Bool = (true ∧ true) `assertEq!` true
 
 @test
-def mathAnd02(): Bool = (true ∧ false) `assertEq!` false
+def doublePipe01(): Bool = ((1, 2) ||> Add.add) == 3
 
 @test
-def mathAnd03(): Bool = (false ∧ true) `assertEq!` false
+def doublePipe02(): Bool = (("a", "b") ||> Add.add) == "ab"
 
 @test
-def mathAnd04(): Bool = (false ∧ false) `assertEq!` false
-
-/////////////////////////////////////////////////////////////////////////////
-// Logical Or                                                              //
-/////////////////////////////////////////////////////////////////////////////
-@test
-def mathOr01(): Bool = (true ∨ true) `assertEq!` true
+def doublePipe03(): Bool = (("abc", "def") ||> String.concat) == "abcdef"
 
 @test
-def mathOr02(): Bool = (true ∨ false) `assertEq!` true
+def doublePipe04(): Bool =
+    ((1 :: 2 :: 3 :: Nil, 4 :: 5 :: Nil) ||> List.append) == 1 :: 2 :: 3 :: 4 :: 5 :: Nil
 
 @test
-def mathOr03(): Bool = (false ∨ true) `assertEq!` true
-
-@test
-def mathOr04(): Bool = (false ∨ false) `assertEq!` false
+def doublePipe05(): Bool = ((0, 5) ||> List.range) == 0 :: 1 :: 2 :: 3 :: 4 :: Nil
 
 /////////////////////////////////////////////////////////////////////////////
-// Logical Implication                                                     //
+// !> (imperativePipe)                                                     //
 /////////////////////////////////////////////////////////////////////////////
-@test
-def mathImplication01(): Bool = (true → true) `assertEq!` true
 
 @test
-def mathImplication02(): Bool = (true → false) `assertEq!` false
+def imperativePipe01(): Bool = region r {
+        let m: MutList[Int32, _] = new MutList(r);
+        let f = (x) -> MutList.push!(x, m);
+        (4 !> f) == 4 and not MutList.isEmpty(m)
+    }
 
 @test
-def mathImplication03(): Bool = (false → true) `assertEq!` true
+def imperativePipe02(): Bool = region r {
+        let m: MutList[Int32, _] = new MutList(r);
+        let f = (x) -> MutList.push!(x, m);
+
+        let a = 4 !> f;
+        let b = 5 !> f;
+        let c = 7 !> f;
+        a == 4 and b == 5 and c == 7 and MutList.length(m) == 3
+    }
 
 @test
-def mathImplication04(): Bool = (false → false) `assertEq!` true
-
-/////////////////////////////////////////////////////////////////////////////
-// Logical Biconditional                                                   //
-/////////////////////////////////////////////////////////////////////////////
-@test
-def mathBiconditional01(): Bool = (true ↔ true) `assertEq!` true
+def imperativePipe03(): Bool & Impure =
+    let a = ref 8;
+    let f = (x) -> a := x;
+    (2 !> f) == 2 and deref a == 2
 
 @test
-def mathBiconditional02(): Bool = (true ↔ false) `assertEq!` false
-
-@test
-def mathBiconditional03(): Bool = (false ↔ true) `assertEq!` false
-
-@test
-def mathBiconditional04(): Bool = (false ↔ false) `assertEq!` true
-
-/////////////////////////////////////////////////////////////////////////////
-// Logical Xor                                                             //
-/////////////////////////////////////////////////////////////////////////////
-@test
-def mathXor01(): Bool = (true ⊕ true) `assertEq!` false
-
-@test
-def mathXor02(): Bool = (true ⊕ false) `assertEq!` true
-
-@test
-def mathXor03(): Bool = (false ⊕ true) `assertEq!` true
-
-@test
-def mathXor04(): Bool = (false ⊕ false) `assertEq!` false
-
-/////////////////////////////////////////////////////////////////////////////
-// Sheffer Stroke                                                          //
-/////////////////////////////////////////////////////////////////////////////
-@test
-def mathSheffer01(): Bool = (true ↑ true) `assertEq!` false
-
-@test
-def mathSheffer02(): Bool = (true ↑ false) `assertEq!` true
-
-@test
-def mathSheffer03(): Bool = (false ↑ true) `assertEq!` true
-
-@test
-def mathSheffer04(): Bool = (false ↑ false) `assertEq!` true
+def imperativePipe04(): Bool & Impure =
+    let a = ref 8;
+    let f = (x) -> a := x;
+    (2 !> f) == 2 and (4 !> f) == 4 and deref a == 4

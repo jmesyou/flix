@@ -1,8 +1,25 @@
+/*
+ * Copyright 2021 Jonathan Lindegaard Starup
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.FinalAst.Root
-import ca.uwaterloo.flix.language.ast.{MonoType, SourceLocation, SpecialOperator, Symbol}
+import ca.uwaterloo.flix.language.ast.ErasedAst.Root
+import ca.uwaterloo.flix.language.ast.{MonoType, SourceLocation, Symbol}
+import ca.uwaterloo.flix.language.phase.jvm.JvmName.MethodDescriptor
 import ca.uwaterloo.flix.util.{InternalCompilerException, JvmTarget}
 import org.objectweb.asm.Opcodes._
 import org.objectweb.asm.{ClassWriter, Label, MethodVisitor}
@@ -234,7 +251,7 @@ object AsmOps {
     case JvmType.PrimShort => visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Short", "valueOf", "(S)Ljava/lang/Short;", false)
     case JvmType.PrimInt => visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", false)
     case JvmType.PrimLong => visitor.visitMethodInsn(INVOKESTATIC, "java/lang/Long", "valueOf", "(J)Ljava/lang/Long;", false)
-    case JvmType.Reference(name) => ()
+    case JvmType.Reference(_) => ()
   }
 
   /**
@@ -302,7 +319,7 @@ object AsmOps {
     * For example, the class of `Tuple[Int32, Int32]` has the following `setField0` method:
     *
     * public final void setField0(int var) {
-    *   this.field0 = var;
+    * this.field0 = var;
     * }
     */
   def compileSetFieldMethod(visitor: ClassWriter, classType: JvmName, fieldName: String, methodName: String, fieldType: JvmType): Unit = {
@@ -353,7 +370,7 @@ object AsmOps {
     mv.visitTypeInsn(NEW, className.toInternalName)
     mv.visitInsn(DUP2)
     mv.visitInsn(SWAP)
-    mv.visitMethodInsn(INVOKESPECIAL, className.toInternalName, "<init>", "(Lflix/runtime/ReifiedSourceLocation;)V", false)
+    mv.visitMethodInsn(INVOKESPECIAL, className.toInternalName, "<init>", s"(${BackendObjType.ReifiedSourceLocation.toDescriptor})${JvmType.Void.toDescriptor}", false)
     mv.visitInsn(ATHROW)
   }
 
@@ -362,28 +379,29 @@ object AsmOps {
     */
   def compileThrowHoleError(mv: MethodVisitor, hole: String, loc: SourceLocation): Unit = {
     compileReifiedSourceLocation(mv, loc)
-    val className = JvmName.Runtime.HoleError
+    val className = BackendObjType.HoleError.jvmName
     mv.visitTypeInsn(NEW, className.toInternalName)
     mv.visitInsn(DUP2)
     mv.visitInsn(SWAP)
     mv.visitLdcInsn(hole)
     mv.visitInsn(SWAP)
-    mv.visitMethodInsn(INVOKESPECIAL, className.toInternalName, "<init>", "(Ljava/lang/String;Lflix/runtime/ReifiedSourceLocation;)V", false)
+    mv.visitMethodInsn(INVOKESPECIAL, className.toInternalName, "<init>", s"(${BackendObjType.String.toDescriptor}${BackendObjType.ReifiedSourceLocation.toDescriptor})${JvmType.Void.toDescriptor}", false)
     mv.visitInsn(ATHROW)
   }
 
   /**
     * Generates code which instantiate a reified source location.
     */
-  private def compileReifiedSourceLocation(mv: MethodVisitor, loc: SourceLocation): Unit = {
-    mv.visitTypeInsn(NEW, JvmName.Runtime.ReifiedSourceLocation.toInternalName)
+  def compileReifiedSourceLocation(mv: MethodVisitor, loc: SourceLocation): Unit = {
+    val RslType = BackendObjType.ReifiedSourceLocation
+    mv.visitTypeInsn(NEW, RslType.jvmName.toInternalName)
     mv.visitInsn(DUP)
-    mv.visitLdcInsn(loc.source.format)
+    mv.visitLdcInsn(loc.source.name)
     mv.visitLdcInsn(loc.beginLine)
     mv.visitLdcInsn(loc.beginCol)
     mv.visitLdcInsn(loc.endLine)
     mv.visitLdcInsn(loc.endCol)
-    mv.visitMethodInsn(INVOKESPECIAL, JvmName.Runtime.ReifiedSourceLocation.toInternalName, "<init>", "(Ljava/lang/String;IIII)V", false)
+    mv.visitMethodInsn(INVOKESPECIAL, RslType.jvmName.toInternalName, JvmName.ConstructorMethod, RslType.Constructor.d.toDescriptor, false)
   }
 
   /**
@@ -417,32 +435,12 @@ object AsmOps {
     * Emits code that puts the function object of the def symbol `def` on top of the stack.
     */
   def compileDefSymbol(sym: Symbol.DefnSym, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
-    // Retrieve the namespace of the def symbol.
-    val ns = JvmOps.getNamespace(sym)
-
-    // Retrieve the JVM type of the namespace.
-    val nsJvmType = JvmOps.getNamespaceClassType(ns)
-
-    // Retrieve the name of the namespace field on the context object.
-    val nsFieldName = JvmOps.getNamespaceFieldNameInContextClass(ns)
-
-    // Retrieve the name of the def on the namespace object.
-    val defFieldName = JvmOps.getDefFieldNameInNamespaceClass(sym)
-
-    // Retrieve the type of the function def class.
+    // JvmType of Def
     val defJvmType = JvmOps.getFunctionDefinitionClassType(sym)
 
-    // The java.util.function.Function interface type.
-    val interfaceType = JvmType.Function
-
-    // Load the current context.
-    mv.visitVarInsn(ALOAD, 1)
-
-    // Load the namespace object.
-    mv.visitFieldInsn(GETFIELD, JvmName.Context.toInternalName, nsFieldName, nsJvmType.toDescriptor)
-
-    // Load the def object.
-    mv.visitFieldInsn(GETFIELD, nsJvmType.name.toInternalName, defFieldName, defJvmType.toDescriptor)
+    mv.visitTypeInsn(NEW, defJvmType.name.toInternalName)
+    mv.visitInsn(DUP)
+    mv.visitMethodInsn(INVOKESPECIAL, defJvmType.name.toInternalName, JvmName.ConstructorMethod, MethodDescriptor.NothingToVoid.toDescriptor, false)
   }
 
   /**
@@ -524,33 +522,24 @@ object AsmOps {
     case JvmType.PrimShort => mv.visitMethodInsn(INVOKESTATIC, "java/lang/Short", "valueOf", "(S)Ljava/lang/Short;", false)
     case JvmType.PrimInt => mv.visitMethodInsn(INVOKESTATIC, "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", false)
     case JvmType.PrimLong => mv.visitMethodInsn(INVOKESTATIC, "java/lang/Long", "valueOf", "(J)Ljava/lang/Long;", false)
-    case JvmType.Reference(name) => ()
+    case JvmType.Reference(_) => ()
   }
 
   /**
     * Emits code to construct a new proxy object for the value on top of the stack of the given type `tpe`.
     */
-  def newProxyObject(tpe: MonoType, mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
+  def newProxyObject(mv: MethodVisitor)(implicit root: Root, flix: Flix): Unit = {
     // Construct the equal function object.
-    root.specialOps(SpecialOperator.Equality).get(tpe) match {
-      case None => mv.visitInsn(ACONST_NULL)
-      case Some(hashSym) => AsmOps.compileDefSymbol(hashSym, mv)
-    }
+    mv.visitInsn(ACONST_NULL)
 
     // Construct the hash function object.
-    root.specialOps(SpecialOperator.HashCode).get(tpe) match {
-      case None => mv.visitInsn(ACONST_NULL)
-      case Some(hashSym) => AsmOps.compileDefSymbol(hashSym, mv)
-    }
+    mv.visitInsn(ACONST_NULL)
 
     // Construct the toStr function object.
-    root.specialOps(SpecialOperator.ToString).get(tpe) match {
-      case None => mv.visitInsn(ACONST_NULL)
-      case Some(hashSym) => AsmOps.compileDefSymbol(hashSym, mv)
-    }
+    mv.visitInsn(ACONST_NULL)
 
     // Construct the proxy object.
-    mv.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.ProxyObject.toInternalName, "of", "(Ljava/lang/Object;Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/Function;)Lflix/runtime/ProxyObject;", false);
+    mv.visitMethodInsn(INVOKESTATIC, JvmName.ProxyObject.toInternalName, "of", s"(Ljava/lang/Object;Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/Function;)L${JvmName.ProxyObject.toInternalName};", false)
   }
 
   /**
@@ -583,7 +572,7 @@ object AsmOps {
     mv.visitInsn(ARRAYLENGTH)
 
     // Allocate a new array of proxy objects of the same length as the original array and store it in a local variable.
-    mv.visitTypeInsn(ANEWARRAY, JvmName.Runtime.ProxyObject.toInternalName)
+    mv.visitTypeInsn(ANEWARRAY, JvmName.ProxyObject.toInternalName)
     mv.visitVarInsn(ASTORE, resultArrayIndex)
 
     // Initialize the loop counter to zero.
@@ -624,7 +613,7 @@ object AsmOps {
     boxIfPrim(jvmElementType, mv)
 
     // Allocate a new proxy object for the element.
-    newProxyObject(elementType, mv)
+    newProxyObject(mv)
 
     // The result array, current index, and proxy object is on the stack. Store the element.
     mv.visitInsn(AASTORE)
@@ -645,5 +634,4 @@ object AsmOps {
     mv.visitVarInsn(ALOAD, resultArrayIndex)
 
   }
-
 }

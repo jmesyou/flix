@@ -9,7 +9,7 @@
 //
 enum AExp {
     // a literal integer constant.
-    case Cst(Int),
+    case Cst(Int32),
 
     // a binary addition expression: e1 + e2.
     case Plus(AExp, AExp),
@@ -37,10 +37,10 @@ enum BExp {
     // a logical negation expression: !e.
     case Not(BExp),
 
-    // a logical conjunction expression: e1 && e2.
+    // a logical conjunction expression: e1 and e2.
     case Conj(BExp, BExp),
 
-    // a logical disjunction expression: e1 || e2.
+    // a logical disjunction expression: e1 or e2.
     case Disj(BExp, BExp),
 
     // an equality of expression: e1 == e2.
@@ -53,7 +53,7 @@ enum BExp {
 //
 // We now define a small interpreter for arithmetic expressions.
 //
-def evalAExp(e: AExp): Int = match e with {
+def evalAExp(e: AExp): Int32 = match e {
     case Cst(i)                 => i
     case Plus(e1, e2)           => evalAExp(e1) + evalAExp(e2)
     case Minus(e1, e2)          => evalAExp(e1) - evalAExp(e2)
@@ -66,12 +66,12 @@ def evalAExp(e: AExp): Int = match e with {
 //
 // and here is the small interpreter for boolean expressions.
 //
-def evalBExp(e: BExp): Bool = match e with {
+def evalBExp(e: BExp): Bool = match e {
     case True           => true
     case False          => false
-    case Not(e1)        => !evalBExp(e1)
-    case Conj(e1, e2)   => evalBExp(e1) && evalBExp(e2)
-    case Disj(e1, e2)   => evalBExp(e1) || evalBExp(e2)
+    case Not(e1)        => not evalBExp(e1)
+    case Conj(e1, e2)   => evalBExp(e1) and evalBExp(e2)
+    case Disj(e1, e2)   => evalBExp(e1) or evalBExp(e2)
     case Eq(e1, e2)     => evalAExp(e1) == evalAExp(e2)
     case Neq(e1,e2)     => evalAExp(e1) != evalAExp(e2)
 }
@@ -84,28 +84,28 @@ def evalBExp(e: BExp): Bool = match e with {
 //
 
 @test
-def testEvalAExp1(): Int = evalAExp(Cst(42))
+def testEvalAExp1(): Int32 = evalAExp(Cst(42))
 
 @test
-def testEvalAExp2(): Int = evalAExp(Plus(Cst(42), Cst(21)))
+def testEvalAExp2(): Int32 = evalAExp(Plus(Cst(42), Cst(21)))
 
 @test
-def testEvalAExp3(): Int = evalAExp(Minus(Cst(42), Cst(21)))
+def testEvalAExp3(): Int32 = evalAExp(Minus(Cst(42), Cst(21)))
 
 @test
-def testEvalAExp4(): Int = evalAExp(IfThenElse(True, Cst(1), Cst(2)))
+def testEvalAExp4(): Int32 = evalAExp(IfThenElse(True, Cst(1), Cst(2)))
 
 @test
-def testEvalAExp5(): Int = evalAExp(IfThenElse(Neq(Cst(1), Cst(2)), Cst(42), Cst(21)))
+def testEvalAExp5(): Int32 = evalAExp(IfThenElse(Neq(Cst(1), Cst(2)), Cst(42), Cst(21)))
 
 @test
 def testEvalBExp1(): Bool = evalBExp(True)
 
 @test
-def testEvalBExp2(): Bool = !evalBExp(Not(True))
+def testEvalBExp2(): Bool = not evalBExp(Not(True))
 
 @test
-def testEvalBExp3(): Bool = !evalBExp(Conj(True, False))
+def testEvalBExp3(): Bool = not evalBExp(Conj(True, False))
 
 @test
 def testEvalBExp4(): Bool = evalBExp(Disj(True, False))
@@ -124,7 +124,7 @@ def testEvalBExp5(): Bool = evalBExp(Neq(Cst(1), Cst(2)))
 enum Inst {
 
     // an instruction that pushes the constant integer on the stack.
-    case Push(Int),
+    case Push(Int32),
 
     // an instruction that adds the top two operands on the stack.
     case Add,
@@ -156,7 +156,7 @@ enum Inst {
 //
 // The append function appends two lists and is defined in the bottom of this file.
 //
-def compileAExp(e: AExp): List[Inst] = match e with {
+def compileAExp(e: AExp): List[Inst] = match e {
     case Cst(i)         => Push(i) :: Nil
     case Plus(e1, e2)   =>
         let is1 = compileAExp(e1);
@@ -180,7 +180,7 @@ def compileAExp(e: AExp): List[Inst] = match e with {
 //
 // and a compiler for boolean expressions:
 //
-def compileBExp(e: BExp): List[Inst] = match e with {
+def compileBExp(e: BExp): List[Inst] = match e {
     case True           => Push(1) :: Nil
     case False          => Push(0) :: Nil
     case Not(e1)         =>
@@ -240,7 +240,7 @@ def testCompileBExp5(): List[Inst] = compileBExp(Neq(Cst(1), Cst(2)))
 //
 // Finally, we write an interpreter for the stack-based language:
 //
-def evalInst(instructions: List[Inst], stack: List[Int]): Int = match (instructions, stack) with {
+def evalInst(instructions: List[Inst], stack: List[Int32]): Int32 = match (instructions, stack) {
     case (Nil, x :: _) => x
     case ((Push(i)) :: rs, st) => evalInst(rs, i :: st)
     case (Add :: rs, i1 :: i2 :: st) => evalInst(rs, (i1 + i2) :: st)
@@ -252,12 +252,12 @@ def evalInst(instructions: List[Inst], stack: List[Int]): Int = match (instructi
         else
             evalInst(rs, 0 :: st)
     case (And :: rs, i1 :: i2 :: st) =>
-        if (i1 != 0 && i2 != 0)
+        if (i1 != 0 and i2 != 0)
             evalInst(rs, 1 :: st)
         else
             evalInst(rs, 0 :: st)
     case (Or :: rs, i1 :: i2 :: st) =>
-        if (i1 != 0 || i2 != 0)
+        if (i1 != 0 or i2 != 0)
             evalInst(rs, 1 :: st)
         else
             evalInst(rs, 0 :: st)
@@ -278,19 +278,19 @@ def evalInst(instructions: List[Inst], stack: List[Int]): Int = match (instructi
 // and we can test the compiler and interpreter:
 //
 @test
-def testCompileAndEval1(): Int = evalInst(compileAExp(Cst(42)), Nil)
+def testCompileAndEval1(): Int32 = evalInst(compileAExp(Cst(42)), Nil)
 
 @test
-def testCompileAndEval2(): Int = evalInst(compileAExp(Plus(Cst(42), Cst(21))), Nil)
+def testCompileAndEval2(): Int32 = evalInst(compileAExp(Plus(Cst(42), Cst(21))), Nil)
 
 @test
-def testCompileAndEval3(): Int = evalInst(compileAExp(Minus(Cst(42), Cst(21))), Nil)
+def testCompileAndEval3(): Int32 = evalInst(compileAExp(Minus(Cst(42), Cst(21))), Nil)
 
 @test
-def testCompileAndEval4(): Int = evalInst(compileAExp(IfThenElse(True, Cst(1), Cst(2))), Nil)
+def testCompileAndEval4(): Int32 = evalInst(compileAExp(IfThenElse(True, Cst(1), Cst(2))), Nil)
 
 @test
-def testCompileAndEval5(): Int = evalInst(compileAExp(IfThenElse(Neq(Cst(1), Cst(2)), Cst(42), Cst(21))), Nil)
+def testCompileAndEval5(): Int32 = evalInst(compileAExp(IfThenElse(Neq(Cst(1), Cst(2)), Cst(42), Cst(21))), Nil)
 
 @test
-def testCompileAndEval6(): Int = evalInst(compileAExp(IfThenElse(Eq(Cst(1), Cst(2)), Cst(42), Times(Cst(21), Cst(82)))), Nil)
+def testCompileAndEval6(): Int32 = evalInst(compileAExp(IfThenElse(Eq(Cst(1), Cst(2)), Cst(42), Times(Cst(21), Cst(82)))), Nil)

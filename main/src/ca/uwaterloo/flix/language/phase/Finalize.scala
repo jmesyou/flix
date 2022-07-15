@@ -17,18 +17,18 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.CompilationError
+import ca.uwaterloo.flix.language.CompilationMessage
 import ca.uwaterloo.flix.language.ast._
 import ca.uwaterloo.flix.util.Validation._
 import ca.uwaterloo.flix.util.{InternalCompilerException, Validation}
 
 import scala.collection.mutable
 
-object Finalize extends Phase[SimplifiedAst.Root, FinalAst.Root] {
+object Finalize {
 
   private type TopLevel = mutable.Map[Symbol.DefnSym, FinalAst.Def]
 
-  def run(root: SimplifiedAst.Root)(implicit flix: Flix): Validation[FinalAst.Root, CompilationError] = flix.phase("Finalize") {
+  def run(root: LiftedAst.Root)(implicit flix: Flix): Validation[FinalAst.Root, CompilationMessage] = flix.phase("Finalize") {
 
     val m: TopLevel = mutable.Map.empty
 
@@ -36,209 +36,129 @@ object Finalize extends Phase[SimplifiedAst.Root, FinalAst.Root] {
       case (k, v) => k -> visitDef(v, m)
     }
 
-    val effs = root.effs.map {
-      case (k, v) => k -> visitEff(v)
-    }
-
-    val handlers = root.handlers.map {
-      case (k, v) => k -> visitHandler(v, m)
-    }
-
     val enums = root.enums.map {
       case (sym, enum) => sym -> visitEnum(enum, m)
     }
 
-    val relations = root.relations.map {
-      case (k, v) => k -> visitRelation(v)
-    }
-
-    val lattices = root.lattices.map {
-      case (k, v) => k -> visitLattice(v)
-    }
-
-    val latticeComponents = root.latticeComponents.map {
-      case (k, v) => visitType(k) -> visitLatticeComponents(v, m)
-    }
-
-    val properties = root.properties.map(p => visitProperty(p, m))
-
-    val specialOps = root.specialOps.map {
-      case (op, ops) => op -> ops.map {
-        case (tpe, sym) => visitType(tpe) -> sym
-      }
-    }
-
-    val reachable = root.reachable
-
-    FinalAst.Root(defs ++ m, effs, handlers, enums, relations, lattices, latticeComponents, properties, specialOps, reachable, root.sources).toSuccess
+    FinalAst.Root(defs ++ m, enums, root.entryPoint, root.sources).toSuccess
   }
 
-  private def visitDef(def0: SimplifiedAst.Def, m: TopLevel)(implicit flix: Flix): FinalAst.Def = {
+  private def visitDef(def0: LiftedAst.Def, m: TopLevel)(implicit flix: Flix): FinalAst.Def = {
     val fs = def0.fparams.map(visitFormalParam)
     val e = visitExp(def0.exp, m)
     val tpe = visitType(def0.tpe)
     FinalAst.Def(def0.ann, def0.mod, def0.sym, fs, e, tpe, def0.loc)
   }
 
-  private def visitEnum(enum0: SimplifiedAst.Enum, m: TopLevel)(implicit flix: Flix): FinalAst.Enum = enum0 match {
-    case SimplifiedAst.Enum(mod, sym, cases0, tpe0, loc) =>
+  private def visitEnum(enum0: LiftedAst.Enum, m: TopLevel)(implicit flix: Flix): FinalAst.Enum = enum0 match {
+    case LiftedAst.Enum(ann, mod, sym, cases0, tpe0, loc) =>
       val cases = cases0.map {
-        case (tag, SimplifiedAst.Case(enumSym, tagName, tagType, tagLoc)) =>
+        case (tag, LiftedAst.Case(enumSym, tagName, tagType, tagLoc)) =>
           val tpe = visitType(tagType)
           tag -> FinalAst.Case(enumSym, tagName, tpe, tagLoc)
       }
       val tpe = visitType(tpe0)
-      FinalAst.Enum(mod, sym, cases, tpe, loc)
+      FinalAst.Enum(ann, mod, sym, cases, tpe, loc)
   }
 
-  private def visitEff(eff0: SimplifiedAst.Eff): FinalAst.Eff = {
-    val fs = eff0.fparams.map(visitFormalParam)
-    val tpe = visitType(eff0.tpe)
-    FinalAst.Eff(eff0.ann, eff0.mod, eff0.sym, fs, tpe, eff0.loc)
-  }
+  private def visitExp(exp0: LiftedAst.Expression, m: TopLevel)(implicit flix: Flix): FinalAst.Expression = {
 
-  private def visitHandler(handler0: SimplifiedAst.Handler, m: TopLevel)(implicit flix: Flix): FinalAst.Handler = {
-    val fs = handler0.fparams.map(visitFormalParam)
-    val e = visitExp(handler0.exp, m)
-    val tpe = visitType(handler0.tpe)
-    FinalAst.Handler(handler0.ann, handler0.mod, handler0.sym, fs, e, tpe, handler0.loc)
-  }
+    def visit(e0: LiftedAst.Expression): FinalAst.Expression = e0 match {
+      case LiftedAst.Expression.Unit(loc) =>
+        FinalAst.Expression.Unit(loc)
 
-  private def visitRelation(relation0: SimplifiedAst.Relation): FinalAst.Relation = relation0 match {
-    case SimplifiedAst.Relation(mod, sym, attr, loc) =>
-      FinalAst.Relation(mod, sym, attr.map(visitAttribute), loc)
-  }
+      case LiftedAst.Expression.Null(tpe, loc) =>
+        FinalAst.Expression.Null(visitType(tpe), loc)
 
-  private def visitLattice(lattice0: SimplifiedAst.Lattice): FinalAst.Lattice = lattice0 match {
-    case SimplifiedAst.Lattice(mod, sym, attr, loc) =>
-      FinalAst.Lattice(mod, sym, attr.map(visitAttribute), loc)
-  }
+      case LiftedAst.Expression.True(loc) =>
+        FinalAst.Expression.True(loc)
 
-  private def visitConstraint(constraint0: SimplifiedAst.Constraint, m: TopLevel)(implicit flix: Flix): FinalAst.Constraint = {
-    val head = visitHeadPredicate(constraint0.cparams, constraint0.head, m)
-    val body = constraint0.body.map(b => visitBodyPredicate(constraint0.cparams, b, m))
-    val cparams = constraint0.cparams.map {
-      case SimplifiedAst.ConstraintParam.HeadParam(sym, tpe0, loc) =>
-        val tpe = visitType(tpe0)
-        FinalAst.ConstraintParam.HeadParam(sym, tpe, loc)
+      case LiftedAst.Expression.False(loc) =>
+        FinalAst.Expression.False(loc)
 
-      case SimplifiedAst.ConstraintParam.RuleParam(sym, tpe0, loc) =>
-        val tpe = visitType(tpe0)
-        FinalAst.ConstraintParam.RuleParam(sym, tpe, loc)
-    }
-    FinalAst.Constraint(cparams, head, body)
-  }
+      case LiftedAst.Expression.Char(lit, loc) =>
+        FinalAst.Expression.Char(lit, loc)
 
-  private def visitLatticeComponents(lc: SimplifiedAst.LatticeComponents, m: TopLevel)(implicit flix: Flix): FinalAst.LatticeComponents = lc match {
-    case SimplifiedAst.LatticeComponents(tpe0, bot, top, equ, leq, lub, glb, loc) =>
-      val tpe = visitType(tpe0)
-      FinalAst.LatticeComponents(tpe, bot, top, equ, leq, lub, glb, loc)
-  }
+      case LiftedAst.Expression.Float32(lit, loc) =>
+        FinalAst.Expression.Float32(lit, loc)
 
-  private def visitExp(exp0: SimplifiedAst.Expression, m: TopLevel)(implicit flix: Flix): FinalAst.Expression = {
+      case LiftedAst.Expression.Float64(lit, loc) =>
+        FinalAst.Expression.Float64(lit, loc)
 
-    def visit(e0: SimplifiedAst.Expression): FinalAst.Expression = e0 match {
-      case SimplifiedAst.Expression.Unit =>
-        FinalAst.Expression.Unit
+      case LiftedAst.Expression.Int8(lit, loc) =>
+        FinalAst.Expression.Int8(lit, loc)
 
-      case SimplifiedAst.Expression.True =>
-        FinalAst.Expression.True
+      case LiftedAst.Expression.Int16(lit, loc) =>
+        FinalAst.Expression.Int16(lit, loc)
 
-      case SimplifiedAst.Expression.False =>
-        FinalAst.Expression.False
+      case LiftedAst.Expression.Int32(lit, loc) =>
+        FinalAst.Expression.Int32(lit, loc)
 
-      case SimplifiedAst.Expression.Char(lit) =>
-        FinalAst.Expression.Char(lit)
+      case LiftedAst.Expression.Int64(lit, loc) =>
+        FinalAst.Expression.Int64(lit, loc)
 
-      case SimplifiedAst.Expression.Float32(lit) =>
-        FinalAst.Expression.Float32(lit)
+      case LiftedAst.Expression.BigInt(lit, loc) =>
+        FinalAst.Expression.BigInt(lit, loc)
 
-      case SimplifiedAst.Expression.Float64(lit) =>
-        FinalAst.Expression.Float64(lit)
+      case LiftedAst.Expression.Str(lit, loc) =>
+        FinalAst.Expression.Str(lit, loc)
 
-      case SimplifiedAst.Expression.Int8(lit) =>
-        FinalAst.Expression.Int8(lit)
-
-      case SimplifiedAst.Expression.Int16(lit) =>
-        FinalAst.Expression.Int16(lit)
-
-      case SimplifiedAst.Expression.Int32(lit) =>
-        FinalAst.Expression.Int32(lit)
-
-      case SimplifiedAst.Expression.Int64(lit) =>
-        FinalAst.Expression.Int64(lit)
-
-      case SimplifiedAst.Expression.BigInt(lit) =>
-        FinalAst.Expression.BigInt(lit)
-
-      case SimplifiedAst.Expression.Str(lit) =>
-        FinalAst.Expression.Str(lit)
-
-      case SimplifiedAst.Expression.Var(sym, tpe, loc) =>
+      case LiftedAst.Expression.Var(sym, tpe, loc) =>
         val t = visitType(tpe)
         FinalAst.Expression.Var(sym, t, loc)
 
-      case SimplifiedAst.Expression.Closure(sym, freeVars, tpe, loc) =>
-        val fvs = freeVars.map(visitFreeVar)
+      case LiftedAst.Expression.Closure(sym, closureArgs, tpe, loc) =>
         val t = visitType(tpe)
-        FinalAst.Expression.Closure(sym, fvs, getFunctionTypeTemporaryToBeRemoved(fvs, t), t, loc)
+        val newClosureArgs = closureArgs.map(visit)
+        val fnMonoType = getFunctionTypeTemporaryToBeRemoved(newClosureArgs, t)
+        FinalAst.Expression.Closure(sym, newClosureArgs, fnMonoType, t, loc)
 
-      case SimplifiedAst.Expression.ApplyClo(exp, args, tpe, loc) =>
+      case LiftedAst.Expression.ApplyClo(exp, args, tpe, _, loc) =>
         val as = args map visit
         val t = visitType(tpe)
         FinalAst.Expression.ApplyClo(visit(exp), as, t, loc)
 
-      case SimplifiedAst.Expression.ApplyDef(name, args, tpe, loc) =>
+      case LiftedAst.Expression.ApplyDef(name, args, tpe, _, loc) =>
         val as = args map visit
         val t = visitType(tpe)
         FinalAst.Expression.ApplyDef(name, as, t, loc)
 
-      case SimplifiedAst.Expression.ApplyEff(sym, args, tpe, loc) =>
-        val as = args map visit
-        val t = visitType(tpe)
-        FinalAst.Expression.ApplyEff(sym, as, t, loc)
-
-      case SimplifiedAst.Expression.ApplyCloTail(exp, args, tpe, loc) =>
+      case LiftedAst.Expression.ApplyCloTail(exp, args, tpe, _, loc) =>
         val e = visit(exp)
         val rs = args map visit
         val t = visitType(tpe)
         FinalAst.Expression.ApplyCloTail(e, rs, t, loc)
 
-      case SimplifiedAst.Expression.ApplyDefTail(sym, args, tpe, loc) =>
+      case LiftedAst.Expression.ApplyDefTail(sym, args, tpe, _, loc) =>
         val as = args map visit
         val t = visitType(tpe)
         FinalAst.Expression.ApplyDefTail(sym, as, t, loc)
 
-      case SimplifiedAst.Expression.ApplyEffTail(sym, args, tpe, loc) =>
-        val as = args map visit
-        val t = visitType(tpe)
-        FinalAst.Expression.ApplyEffTail(sym, as, t, loc)
-
-      case SimplifiedAst.Expression.ApplySelfTail(name, formals, actuals, tpe, loc) =>
+      case LiftedAst.Expression.ApplySelfTail(name, formals, actuals, tpe, _, loc) =>
         val fs = formals.map(visitFormalParam)
         val as = actuals.map(visit)
         val t = visitType(tpe)
         FinalAst.Expression.ApplySelfTail(name, fs, as, t, loc)
 
-      case SimplifiedAst.Expression.Unary(sop, op, exp, tpe, loc) =>
+      case LiftedAst.Expression.Unary(sop, op, exp, tpe, _, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
         FinalAst.Expression.Unary(sop, op, e, t, loc)
 
-      case SimplifiedAst.Expression.Binary(sop, op, exp1, exp2, tpe, loc) =>
+      case LiftedAst.Expression.Binary(sop, op, exp1, exp2, tpe, _, loc) =>
         val e1 = visit(exp1)
         val e2 = visit(exp2)
         val t = visitType(tpe)
         FinalAst.Expression.Binary(sop, op, e1, e2, t, loc)
 
-      case SimplifiedAst.Expression.IfThenElse(exp1, exp2, exp3, tpe, loc) =>
+      case LiftedAst.Expression.IfThenElse(exp1, exp2, exp3, tpe, _, loc) =>
         val e1 = visit(exp1)
         val e2 = visit(exp2)
         val v3 = visit(exp3)
         val t = visitType(tpe)
         FinalAst.Expression.IfThenElse(e1, e2, v3, t, loc)
 
-      case SimplifiedAst.Expression.Branch(exp, branches, tpe, loc) =>
+      case LiftedAst.Expression.Branch(exp, branches, tpe, _, loc) =>
         val e = visit(exp)
         val bs = branches map {
           case (sym, br) => sym -> visit(br)
@@ -246,179 +166,192 @@ object Finalize extends Phase[SimplifiedAst.Root, FinalAst.Root] {
         val t = visitType(tpe)
         FinalAst.Expression.Branch(e, bs, t, loc)
 
-      case SimplifiedAst.Expression.JumpTo(sym, tpe, loc) =>
+      case LiftedAst.Expression.JumpTo(sym, tpe, _, loc) =>
         val t = visitType(tpe)
         FinalAst.Expression.JumpTo(sym, t, loc)
 
-      case SimplifiedAst.Expression.Let(sym, exp1, exp2, tpe, loc) =>
+      case LiftedAst.Expression.Let(sym, exp1, exp2, tpe, _, loc) =>
         val e1 = visit(exp1)
         val e2 = visit(exp2)
         val t = visitType(tpe)
         FinalAst.Expression.Let(sym, e1, e2, t, loc)
 
-      case SimplifiedAst.Expression.LetRec(sym, exp1, exp2, tpe, loc) =>
+      case LiftedAst.Expression.LetRec(varSym, index, defSym, exp1, exp2, tpe, _, loc) =>
         val e1 = visit(exp1)
         val e2 = visit(exp2)
         val t = visitType(tpe)
-        FinalAst.Expression.LetRec(sym, e1, e2, t, loc)
+        FinalAst.Expression.LetRec(varSym, index, defSym, e1, e2, t, loc)
 
-      case SimplifiedAst.Expression.Is(sym, tag, exp, loc) =>
+      case LiftedAst.Expression.Is(sym, tag, exp, _, loc) =>
         val e1 = visit(exp)
         FinalAst.Expression.Is(sym, tag, e1, loc)
 
-      case SimplifiedAst.Expression.Tag(enum, tag, exp, tpe, loc) =>
+      case LiftedAst.Expression.Tag(enum, tag, exp, tpe, _, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
         FinalAst.Expression.Tag(enum, tag, e, t, loc)
 
-      case SimplifiedAst.Expression.Untag(sym, tag, exp, tpe, loc) =>
+      case LiftedAst.Expression.Untag(sym, tag, exp, tpe, _, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
         FinalAst.Expression.Untag(sym, tag, e, t, loc)
 
-      case SimplifiedAst.Expression.Index(base, offset, tpe, loc) =>
+      case LiftedAst.Expression.Index(base, offset, tpe, _, loc) =>
         val b = visit(base)
         val t = visitType(tpe)
         FinalAst.Expression.Index(b, offset, t, loc)
 
-      case SimplifiedAst.Expression.Tuple(elms, tpe, loc) =>
+      case LiftedAst.Expression.Tuple(elms, tpe, _, loc) =>
         val es = elms map visit
         val t = visitType(tpe)
         FinalAst.Expression.Tuple(es, t, loc)
 
-      case SimplifiedAst.Expression.RecordEmpty(tpe, loc) =>
+      case LiftedAst.Expression.RecordEmpty(tpe, loc) =>
         val t = visitType(tpe)
         FinalAst.Expression.RecordEmpty(t, loc)
 
-      case SimplifiedAst.Expression.RecordSelect(exp, label, tpe, loc) =>
+      case LiftedAst.Expression.RecordSelect(exp, field, tpe, _, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
-        FinalAst.Expression.RecordSelect(e, label, t, loc)
+        FinalAst.Expression.RecordSelect(e, field, t, loc)
 
-      case SimplifiedAst.Expression.RecordExtend(label, value, rest, tpe, loc) =>
+      case LiftedAst.Expression.RecordExtend(field, value, rest, tpe, _, loc) =>
         val v = visit(value)
         val r = visit(rest)
         val t = visitType(tpe)
-        FinalAst.Expression.RecordExtend(label, v, r, t, loc)
+        FinalAst.Expression.RecordExtend(field, v, r, t, loc)
 
-      case SimplifiedAst.Expression.RecordRestrict(label, rest, tpe, loc) =>
+      case LiftedAst.Expression.RecordRestrict(field, rest, tpe, _, loc) =>
         val r = visit(rest)
         val t = visitType(tpe)
-        FinalAst.Expression.RecordRestrict(label, r, t, loc)
+        FinalAst.Expression.RecordRestrict(field, r, t, loc)
 
-      case SimplifiedAst.Expression.ArrayLit(elms, tpe, loc) =>
+      case LiftedAst.Expression.ArrayLit(elms, tpe, loc) =>
         val es = elms map visit
         val t = visitType(tpe)
         FinalAst.Expression.ArrayLit(es, t, loc)
 
-      case SimplifiedAst.Expression.ArrayNew(elm, len, tpe, loc) =>
+      case LiftedAst.Expression.ArrayNew(elm, len, tpe, loc) =>
         val e = visit(elm)
         val l = visit(len)
         val t = visitType(tpe)
         FinalAst.Expression.ArrayNew(e, l, t, loc)
 
-      case SimplifiedAst.Expression.ArrayLoad(base, index, tpe, loc) =>
+      case LiftedAst.Expression.ArrayLoad(base, index, tpe, loc) =>
         val b = visit(base)
         val i = visit(index)
         val t = visitType(tpe)
         FinalAst.Expression.ArrayLoad(b, i, t, loc)
 
-      case SimplifiedAst.Expression.ArrayStore(base, index, elm, tpe, loc) =>
+      case LiftedAst.Expression.ArrayStore(base, index, elm, tpe, loc) =>
         val b = visit(base)
         val i = visit(index)
         val e = visit(elm)
         val t = visitType(tpe)
         FinalAst.Expression.ArrayStore(b, i, e, t, loc)
 
-      case SimplifiedAst.Expression.ArrayLength(base, tpe, loc) =>
+      case LiftedAst.Expression.ArrayLength(base, tpe, _, loc) =>
         val b = visit(base)
         val t = visitType(tpe)
         FinalAst.Expression.ArrayLength(b, t, loc)
 
-      case SimplifiedAst.Expression.ArraySlice(base, startIndex, endIndex, tpe, loc) =>
+      case LiftedAst.Expression.ArraySlice(base, startIndex, endIndex, tpe, loc) =>
         val b = visit(base)
         val i1 = visit(startIndex)
         val i2 = visit(endIndex)
         val t = visitType(tpe)
         FinalAst.Expression.ArraySlice(b, i1, i2, t, loc)
 
-      case SimplifiedAst.Expression.Ref(exp, tpe, loc) =>
+      case LiftedAst.Expression.Ref(exp, tpe, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
         FinalAst.Expression.Ref(e, t, loc)
 
-      case SimplifiedAst.Expression.Deref(exp, tpe, loc) =>
+      case LiftedAst.Expression.Deref(exp, tpe, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
         FinalAst.Expression.Deref(e, t, loc)
 
-      case SimplifiedAst.Expression.Assign(exp1, exp2, tpe, loc) =>
+      case LiftedAst.Expression.Assign(exp1, exp2, tpe, loc) =>
         val e1 = visit(exp1)
         val e2 = visit(exp2)
         val t = visitType(tpe)
         FinalAst.Expression.Assign(e1, e2, t, loc)
 
-      case SimplifiedAst.Expression.HandleWith(exp, bindings, tpe, loc) =>
+      case LiftedAst.Expression.Cast(exp, tpe, _, loc) =>
         val e = visit(exp)
-        val bs = bindings map {
-          case SimplifiedAst.HandlerBinding(sym, body) => FinalAst.HandlerBinding(sym, visit(body))
-        }
         val t = visitType(tpe)
-        FinalAst.Expression.HandleWith(e, bs, t, loc)
+        FinalAst.Expression.Cast(e, t, loc)
 
-      case SimplifiedAst.Expression.Existential(fparam, exp, loc) =>
-        val p = visitFormalParam(fparam)
-        val e = visit(exp)
-        FinalAst.Expression.Existential(p, e, loc)
-
-      case SimplifiedAst.Expression.Universal(fparam, exp, loc) =>
-        val p = visitFormalParam(fparam)
-        val e = visit(exp)
-        FinalAst.Expression.Universal(p, e, loc)
-
-      case SimplifiedAst.Expression.TryCatch(exp, rules, tpe, loc) =>
+      case LiftedAst.Expression.TryCatch(exp, rules, tpe, _, loc) =>
         val e = visit(exp)
         val rs = rules map {
-          case SimplifiedAst.CatchRule(sym, clazz, body) =>
+          case LiftedAst.CatchRule(sym, clazz, body) =>
             val b = visit(body)
             FinalAst.CatchRule(sym, clazz, b)
         }
         val t = visitType(tpe)
         FinalAst.Expression.TryCatch(e, rs, t, loc)
 
-      case SimplifiedAst.Expression.NativeConstructor(constructor, args, tpe, loc) =>
-        val es = args map visit
+      case LiftedAst.Expression.InvokeConstructor(constructor, args, tpe, _, loc) =>
+        val as = args.map(visit)
         val t = visitType(tpe)
-        FinalAst.Expression.NativeConstructor(constructor, es, t, loc)
+        FinalAst.Expression.InvokeConstructor(constructor, as, t, loc)
 
-      case SimplifiedAst.Expression.NativeField(field, tpe, loc) =>
+      case LiftedAst.Expression.InvokeMethod(method, exp, args, tpe, _, loc) =>
+        val e = visit(exp)
+        val as = args.map(visit)
         val t = visitType(tpe)
-        FinalAst.Expression.NativeField(field, t, loc)
+        FinalAst.Expression.InvokeMethod(method, e, as, t, loc)
 
-      case SimplifiedAst.Expression.NativeMethod(method, args, tpe, loc) =>
-        val es = args map visit
+      case LiftedAst.Expression.InvokeStaticMethod(method, args, tpe, _, loc) =>
+        val as = args.map(visit)
         val t = visitType(tpe)
-        FinalAst.Expression.NativeMethod(method, es, t, loc)
+        FinalAst.Expression.InvokeStaticMethod(method, as, t, loc)
 
-      case SimplifiedAst.Expression.NewChannel(exp, tpe, loc) =>
+      case LiftedAst.Expression.GetField(field, exp, tpe, _, loc) =>
+        val e = visit(exp)
+        val t = visitType(tpe)
+        FinalAst.Expression.GetField(field, e, t, loc)
+
+      case LiftedAst.Expression.PutField(field, exp1, exp2, tpe, _, loc) =>
+        val e1 = visit(exp1)
+        val e2 = visit(exp2)
+        val t = visitType(tpe)
+        FinalAst.Expression.PutField(field, e1, e2, t, loc)
+
+      case LiftedAst.Expression.GetStaticField(field, tpe, _, loc) =>
+        val t = visitType(tpe)
+        FinalAst.Expression.GetStaticField(field, t, loc)
+
+      case LiftedAst.Expression.PutStaticField(field, exp, tpe, _, loc) =>
+        val e = visit(exp)
+        val t = visitType(tpe)
+        FinalAst.Expression.PutStaticField(field, e, t, loc)
+
+      case LiftedAst.Expression.NewObject(clazz, tpe, _, loc) =>
+        val t = visitType(tpe)
+        FinalAst.Expression.NewObject(clazz, t, loc)
+
+      case LiftedAst.Expression.NewChannel(exp, tpe, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
         FinalAst.Expression.NewChannel(e, t, loc)
 
-      case SimplifiedAst.Expression.GetChannel(exp, tpe, loc) =>
+      case LiftedAst.Expression.GetChannel(exp, tpe, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
         FinalAst.Expression.GetChannel(e, t, loc)
 
-      case SimplifiedAst.Expression.PutChannel(exp1, exp2, tpe, loc) =>
+      case LiftedAst.Expression.PutChannel(exp1, exp2, tpe, loc) =>
         val e1 = visit(exp1)
         val e2 = visit(exp2)
         val t = visitType(tpe)
         FinalAst.Expression.PutChannel(e1, e2, t, loc)
 
-      case SimplifiedAst.Expression.SelectChannel(rules, default, tpe, loc) =>
+      case LiftedAst.Expression.SelectChannel(rules, default, tpe, loc) =>
         val rs = rules map {
-          case SimplifiedAst.SelectChannelRule(sym, chan, exp) =>
+          case LiftedAst.SelectChannelRule(sym, chan, exp) =>
             val c = visit(chan)
             val e = visit(exp)
             FinalAst.SelectChannelRule(sym, c, e)
@@ -427,233 +360,165 @@ object Finalize extends Phase[SimplifiedAst.Root, FinalAst.Root] {
         val t = visitType(tpe)
         FinalAst.Expression.SelectChannel(rs, d, t, loc)
 
-      case SimplifiedAst.Expression.ProcessSpawn(exp, tpe, loc) =>
+      case LiftedAst.Expression.Spawn(exp, tpe, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
-        FinalAst.Expression.ProcessSpawn(e, t, loc)
+        FinalAst.Expression.Spawn(e, t, loc)
 
-      case SimplifiedAst.Expression.ProcessSleep(exp, tpe, loc) =>
+      case LiftedAst.Expression.Lazy(exp, tpe, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
-        FinalAst.Expression.ProcessSleep(e, t, loc)
+        FinalAst.Expression.Lazy(e, t, loc)
 
-      case SimplifiedAst.Expression.ProcessPanic(msg, tpe, loc) =>
-        val t = visitType(tpe)
-        FinalAst.Expression.ProcessPanic(msg, t, loc)
-
-      case SimplifiedAst.Expression.FixpointConstraintSet(cs0, tpe, loc) =>
-        val cs = cs0.map(visitConstraint(_, m))
-        val t = visitType(tpe)
-        FinalAst.Expression.FixpointConstraintSet(cs, t, loc)
-
-      case SimplifiedAst.Expression.FixpointCompose(exp1, exp2, tpe, loc) =>
-        val e1 = visit(exp1)
-        val e2 = visit(exp2)
-        val t = visitType(tpe)
-        FinalAst.Expression.FixpointCompose(e1, e2, t, loc)
-
-      case SimplifiedAst.Expression.FixpointSolve(exp, stf, tpe, loc) =>
+      case LiftedAst.Expression.Force(exp, tpe, loc) =>
         val e = visit(exp)
         val t = visitType(tpe)
-        FinalAst.Expression.FixpointSolve(e, stf, t, loc)
+        FinalAst.Expression.Force(e, t, loc)
 
-      case SimplifiedAst.Expression.FixpointProject(pred, exp, tpe, loc) =>
-        val p = visitPredicateWithParam(pred, m)
-        val e = visit(exp)
-        val t = visitType(tpe)
-        FinalAst.Expression.FixpointProject(p, e, t, loc)
-
-      case SimplifiedAst.Expression.FixpointEntails(exp1, exp2, tpe, loc) =>
-        val e1 = visit(exp1)
-        val e2 = visit(exp2)
-        val t = visitType(tpe)
-        FinalAst.Expression.FixpointEntails(e1, e2, t, loc)
-
-      case SimplifiedAst.Expression.HoleError(sym, tpe, loc) =>
+      case LiftedAst.Expression.HoleError(sym, tpe, loc) =>
         val t = visitType(tpe)
         FinalAst.Expression.HoleError(sym, t, loc)
 
-      case SimplifiedAst.Expression.MatchError(tpe, loc) =>
+      case LiftedAst.Expression.MatchError(tpe, loc) =>
         val t = visitType(tpe)
         FinalAst.Expression.MatchError(t, loc)
-
-      case SimplifiedAst.Expression.SwitchError(tpe, loc) =>
-        val t = visitType(tpe)
-        FinalAst.Expression.SwitchError(t, loc)
-
-      case SimplifiedAst.Expression.Def(sym, t, loc) => throw InternalCompilerException(s"Unexpected expression: '$e0'.")
-      case SimplifiedAst.Expression.Eff(sym, t, loc) => throw InternalCompilerException(s"Unexpected expression: '$e0'.")
-      case SimplifiedAst.Expression.Lambda(fparams, exp, t, loc) => throw InternalCompilerException(s"Unexpected expression: '$e0'.")
-      case SimplifiedAst.Expression.LambdaClosure(fparams, freeVars, exp, t, loc) => throw InternalCompilerException(s"Unexpected expression: '$e0'.")
-      case SimplifiedAst.Expression.Apply(exp, args, t, loc) => throw InternalCompilerException(s"Unexpected expression: '$e0'.")
     }
 
     visit(exp0)
   }
 
-  private def visitHeadPredicate(cparams0: List[SimplifiedAst.ConstraintParam], head0: SimplifiedAst.Predicate.Head, m: TopLevel)(implicit flix: Flix): FinalAst.Predicate.Head = head0 match {
-    case SimplifiedAst.Predicate.Head.Atom(pred, terms, tpe, loc) =>
-      val p = visitPredicateWithParam(pred, m)
-      val ts = terms.map(t => visitHeadTerm(t, m))
-      val t = visitType(tpe)
-      FinalAst.Predicate.Head.Atom(p, ts, t, loc)
-  }
-
-  private def visitBodyPredicate(cparams0: List[SimplifiedAst.ConstraintParam], body0: SimplifiedAst.Predicate.Body, m: TopLevel)(implicit flix: Flix): FinalAst.Predicate.Body = body0 match {
-    case SimplifiedAst.Predicate.Body.Atom(pred, polarity, terms, tpe, loc) =>
-      val p = visitPredicateWithParam(pred, m)
-      val ts = terms.map(t => visitBodyTerm(t, m))
-      val t = visitType(tpe)
-      FinalAst.Predicate.Body.Atom(p, polarity, ts, t, loc)
-
-    case SimplifiedAst.Predicate.Body.Guard(exp, loc) =>
-      val e = visitExp(exp, m)
-      val ts = cparams0.map(cparam => FinalAst.Term.Body.QuantVar(cparam.sym, visitType(cparam.tpe), cparam.loc))
-      FinalAst.Predicate.Body.Guard(e, ts, loc)
-  }
-
-  private def visitPredicateWithParam(p0: SimplifiedAst.PredicateWithParam, m: TopLevel)(implicit flix: Flix): FinalAst.PredicateWithParam = p0 match {
-    case SimplifiedAst.PredicateWithParam(sym, exp) =>
-      val e = visitExp(exp, m)
-      FinalAst.PredicateWithParam(sym, e)
-  }
-
-  private def visitHeadTerm(t0: SimplifiedAst.Term.Head, m: TopLevel)(implicit flix: Flix): FinalAst.Term.Head = t0 match {
-    case SimplifiedAst.Term.Head.QuantVar(sym, tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Head.QuantVar(sym, t, loc)
-
-    case SimplifiedAst.Term.Head.CapturedVar(sym, tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Head.CapturedVar(sym, t, loc)
-
-    case SimplifiedAst.Term.Head.Lit(lit, tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Head.Lit(lit2symTemporaryToBeRemoved(lit, m), t, loc)
-
-    case SimplifiedAst.Term.Head.App(sym, args, tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Head.App(sym, args, t, loc)
-  }
-
-  private def visitBodyTerm(t0: SimplifiedAst.Term.Body, m: TopLevel)(implicit flix: Flix): FinalAst.Term.Body = t0 match {
-    case SimplifiedAst.Term.Body.Wild(tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Body.Wild(t, loc)
-
-    case SimplifiedAst.Term.Body.QuantVar(sym, tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Body.QuantVar(sym, t, loc)
-
-    case SimplifiedAst.Term.Body.CapturedVar(sym, tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Body.CapturedVar(sym, t, loc)
-
-    case SimplifiedAst.Term.Body.Lit(lit, tpe, loc) =>
-      val t = visitType(tpe)
-      FinalAst.Term.Body.Lit(lit2symTemporaryToBeRemoved(lit, m), t, loc)
-  }
-
-  private def visitAttribute(a0: SimplifiedAst.Attribute): FinalAst.Attribute = {
-    val tpe = visitType(a0.tpe)
-    FinalAst.Attribute(a0.name, tpe)
-  }
-
-  private def visitFormalParam(p0: SimplifiedAst.FormalParam): FinalAst.FormalParam = {
+  private def visitFormalParam(p0: LiftedAst.FormalParam): FinalAst.FormalParam = {
     val tpe = visitType(p0.tpe)
     FinalAst.FormalParam(p0.sym, tpe)
   }
 
-  private def visitFreeVar(v0: SimplifiedAst.FreeVar): FinalAst.FreeVar = {
-    val tpe = visitType(v0.tpe)
-    FinalAst.FreeVar(v0.sym, tpe)
-  }
-
-  private def visitProperty(p0: SimplifiedAst.Property, m: TopLevel)(implicit flix: Flix): FinalAst.Property =
-    FinalAst.Property(p0.law, p0.defn, visitExp(p0.exp, m))
-
   // TODO: Should be private
-  def visitType(t0: Type): MonoType = {
-    val base = t0.typeConstructor
-    val args = t0.typeArguments.map(visitType)
 
-    base match {
-      // Primitive Types.
-      case Type.Cst(TypeConstructor.Unit) => MonoType.Unit
-      case Type.Cst(TypeConstructor.Bool) => MonoType.Bool
-      case Type.Cst(TypeConstructor.Char) => MonoType.Char
-      case Type.Cst(TypeConstructor.Float32) => MonoType.Float32
-      case Type.Cst(TypeConstructor.Float64) => MonoType.Float64
-      case Type.Cst(TypeConstructor.Int8) => MonoType.Int8
-      case Type.Cst(TypeConstructor.Int16) => MonoType.Int16
-      case Type.Cst(TypeConstructor.Int32) => MonoType.Int32
-      case Type.Cst(TypeConstructor.Int64) => MonoType.Int64
-      case Type.Cst(TypeConstructor.BigInt) => MonoType.BigInt
-      case Type.Cst(TypeConstructor.Str) => MonoType.Str
+  /**
+    * Finalizes the given type.
+    */
+  def visitType(tpe0: Type): MonoType = {
 
-      // Compound Types.
-      case Type.Cst(TypeConstructor.Array) => MonoType.Array(args.head)
+    def visit(t0: Type): MonoType = {
 
-      case Type.Cst(TypeConstructor.Channel) => MonoType.Channel(args.head)
+      val base = t0.typeConstructor
+      val args = t0.typeArguments.map(visit)
 
-      case Type.Cst(TypeConstructor.Enum(sym, _)) => MonoType.Enum(sym, args)
+      base match {
+        case None => t0 match {
+          case Type.KindedVar(sym, _) => MonoType.Var(sym.id)
+          case _ => throw InternalCompilerException(s"Unexpected type: $t0")
+        }
 
-      case Type.Cst(TypeConstructor.Native(clazz)) => MonoType.Native(clazz)
+        case Some(tc) =>
+          tc match {
+            case TypeConstructor.Unit => MonoType.Unit
 
-      case Type.Cst(TypeConstructor.Ref) => MonoType.Ref(args.head)
+            case TypeConstructor.Null => MonoType.Unit
 
-      case Type.Cst(TypeConstructor.Vector) => MonoType.Array(args.head)
+            case TypeConstructor.Bool => MonoType.Bool
 
-      case Type.Cst(TypeConstructor.Tuple(l)) => MonoType.Tuple(args)
+            case TypeConstructor.Char => MonoType.Char
 
-      case Type.Arrow(_, l) => MonoType.Arrow(args.init, args.last)
+            case TypeConstructor.Float32 => MonoType.Float32
 
-      case Type.RecordEmpty => MonoType.RecordEmpty()
+            case TypeConstructor.Float64 => MonoType.Float64
 
-      case Type.RecordExtend(label, value, rest) => MonoType.RecordExtend(label, visitType(value), visitType(rest))
+            case TypeConstructor.Int8 => MonoType.Int8
 
-      case Type.SchemaEmpty => MonoType.SchemaEmpty()
+            case TypeConstructor.Int16 => MonoType.Int16
 
-      case Type.SchemaExtend(sym, tpe, rest) => MonoType.SchemaExtend(sym, visitType(tpe), visitType(rest))
+            case TypeConstructor.Int32 => MonoType.Int32
 
-      case Type.Relation(sym, attr, _) => MonoType.Relation(sym, attr map visitType)
+            case TypeConstructor.Int64 => MonoType.Int64
 
-      case Type.Lattice(sym, attr, _) => MonoType.Lattice(sym, attr map visitType)
+            case TypeConstructor.BigInt => MonoType.BigInt
 
-      case Type.Zero => MonoType.Unit
+            case TypeConstructor.Str => MonoType.Str
 
-      case Type.Succ(l, t) => MonoType.Unit
+            case TypeConstructor.RecordRowEmpty => MonoType.RecordEmpty()
 
-      case Type.Var(id, kind) => MonoType.Var(id) // TODO: Should never happen.
+            case TypeConstructor.Channel => MonoType.Channel(args.head)
 
-      case Type.Apply(_, _) => throw InternalCompilerException(s"Unexpected type: '$t0'.")
+            case TypeConstructor.Lazy => MonoType.Lazy(args.head)
+
+            case TypeConstructor.KindedEnum(sym, _) => MonoType.Enum(sym, args)
+
+            case TypeConstructor.Tag(sym, _) =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+
+            case TypeConstructor.Native(clazz) => MonoType.Native(clazz)
+
+            case TypeConstructor.Array => MonoType.Array(args.head)
+
+            case TypeConstructor.Ref => MonoType.Ref(args.head)
+
+            case TypeConstructor.Region =>
+              MonoType.Unit // TODO: Should be erased?
+
+            case TypeConstructor.Tuple(l) => MonoType.Tuple(args)
+
+            case TypeConstructor.Arrow(l) => MonoType.Arrow(args.drop(2).init, args.last)
+
+            case TypeConstructor.RecordRowExtend(field) => MonoType.RecordExtend(field.name, args.head, args(1))
+
+            case TypeConstructor.Record => args.head
+
+            case TypeConstructor.True => MonoType.Unit
+
+            case TypeConstructor.False => MonoType.Unit
+
+            case TypeConstructor.Not => MonoType.Unit
+
+            case TypeConstructor.And => MonoType.Unit
+
+            case TypeConstructor.Or => MonoType.Unit
+
+            case TypeConstructor.Complement => MonoType.Unit
+
+            case TypeConstructor.Union => MonoType.Unit
+
+            case TypeConstructor.Intersection => MonoType.Unit
+
+            case TypeConstructor.Effect(_) => MonoType.Unit
+
+            case TypeConstructor.Empty => MonoType.Unit
+
+            case TypeConstructor.All => MonoType.Unit
+
+            case TypeConstructor.UnkindedEnum(_) =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+
+            case TypeConstructor.UnappliedAlias(_) =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+
+            case TypeConstructor.Relation =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+
+            case TypeConstructor.Lattice =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+
+            case TypeConstructor.SchemaRowEmpty =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+
+            case TypeConstructor.SchemaRowExtend(pred) =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+
+            case TypeConstructor.Schema =>
+              throw InternalCompilerException(s"Unexpected type: '$t0'.")
+          }
+      }
     }
+
+    visit(Type.eraseAliases(tpe0))
   }
 
   // TODO: Deprecated
-  private def getFunctionTypeTemporaryToBeRemoved(fvs: List[FinalAst.FreeVar], tpe: MonoType): MonoType = tpe match {
+  private def getFunctionTypeTemporaryToBeRemoved(fvs: List[FinalAst.Expression], tpe: MonoType): MonoType = tpe match {
     case MonoType.Arrow(targs, tresult) =>
       val freeArgs = fvs.map(_.tpe)
       MonoType.Arrow(freeArgs ::: targs, tresult)
     case _ => throw InternalCompilerException(s"Unexpected type: '$tpe'.")
-  }
-
-  // TODO: Deprecated
-  // TODO: This should be done in a prior phase, perhaps during lambda lifting, or not done at all...
-  private def lit2symTemporaryToBeRemoved(exp0: SimplifiedAst.Expression, m: TopLevel)(implicit flix: Flix): Symbol.DefnSym = {
-    // Generate a top-level function for the constant.
-    val sym = Symbol.freshDefnSym("lit")
-    val lit = visitExp(exp0, m)
-    val ann = Ast.Annotations.Empty
-    val mod = Ast.Modifiers(List(Ast.Modifier.Synthetic))
-    val varX = Symbol.freshVarSym("_unit")
-    varX.setStackOffset(0)
-    val fparam = FinalAst.FormalParam(varX, MonoType.Unit)
-    val fs = List(fparam)
-    val tpe = MonoType.Arrow(MonoType.Unit :: Nil, visitType(exp0.tpe))
-    val defn = FinalAst.Def(ann, mod, sym, fs, lit, tpe, exp0.loc)
-    m += (sym -> defn)
-    sym
   }
 
 }

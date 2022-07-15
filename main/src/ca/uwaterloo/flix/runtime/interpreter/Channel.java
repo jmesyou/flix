@@ -1,8 +1,11 @@
 package ca.uwaterloo.flix.runtime.interpreter;
 
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.*;
+
+// TODO: Move this to the Flix runtime.
 
 /**
  * Precondition: Null is not a valid element to put in a channel.
@@ -67,12 +70,6 @@ public final class Channel {
     }
   }
 
-  public static void spawn(Spawnable s) {
-    // Create a new Thread and evaluate the spawned expression in the new Thread
-    Thread thread = new Thread(s::spawn);
-    thread.start();
-  }
-
   /**
    * Given a array of channels, returns the first channel that has an element
    * and return the index of that channel and the retrieved element in a
@@ -85,25 +82,38 @@ public final class Channel {
     // Create new Condition and channelLock the current thread
     Lock selectLock = new ReentrantLock();
     Condition condition = selectLock.newCondition();
-    selectLock.lock();
 
     // Sort channels to avoid deadlock when locking
     Channel[] sortedChannels = sortChannels(channels);
 
-    try {
-      while (!Thread.interrupted()) {
-        // Lock all channels in sorted order
-        lockAllChannels(sortedChannels);
+    while (!Thread.interrupted()) {
+      // Lock all channels in sorted order
+      lockAllChannels(sortedChannels);
+      try {
+        // Lock the select lock after the channels
+        selectLock.lock();
 
         try {
-          // Check if any channel has an element
-          for (int index = 0; index < channels.length; index++) {
-            Channel channel = channels[index];
-            Object element = channel.tryGet();
-            if (element != null) {
-              // Element found.
-              // Return the element and the branchNumber (index of the array) of the containing channel
-              return new SelectChoice(index, element);
+          // Find channels with waiting elements in a random order to prevent backpressure.
+          {
+            // Build list mapping a channel to it's branchNumber (the index of the 'channels' array)
+            List<ChannelIndexPair> channelIndexPairs = new ArrayList<>();
+            for (int index = 0; index < channels.length; index++) {
+              channelIndexPairs.add(new ChannelIndexPair(channels[index], index));
+            }
+
+            // Randomize the order channels are looked at.
+            // This prevents backpressure from building up on one channel.
+            Collections.shuffle(channelIndexPairs, ThreadLocalRandom.current());
+
+            // Find channels with waiting elements
+            for (ChannelIndexPair channelIndexPair : channelIndexPairs) {
+              Object element = channelIndexPair.getChannel().tryGet();
+              if (element != null) {
+                // There is a waiting element in this channel.
+                // Return the element and the branchNumber of this channel
+                return new SelectChoice(channelIndexPair.getIndex(), element);
+              }
             }
           }
 
@@ -124,18 +134,16 @@ public final class Channel {
         }
 
         // Wait for an element to be added to any of the channels
-        try {
-          condition.await();
-        } catch (InterruptedException e) {
-          throw new RuntimeException("Thread interrupted");
-        }
+        condition.await();
+      } catch (InterruptedException e) {
+        throw new RuntimeException("Thread interrupted");
+      } finally {
+        // Unlock the selectLock, which is relevant when a different thread wants to put
+        // an element into a channel that was not selected from the select.
+        // This other channel will then signal the condition from selectLock (in the put method),
+        // so it needs the lock.
+        selectLock.unlock();
       }
-    } finally {
-      // Unlock the selectLock, which is relevant when a different thread wants to put
-      // an element into a channel that was not selected from the select.
-      // This other channel will then signal the condition from selectLock (in the put method),
-      // so it needs the lock.
-      selectLock.unlock();
     }
 
     throw new RuntimeException("Thread interrupted");
@@ -172,7 +180,10 @@ public final class Channel {
    * @param channels the channels to unlock
    */
   private static void unlockAllChannels(Channel[] channels) {
-    for (Channel c : channels) c.channelLock.unlock();
+    // Unlock channels in reverse order like Go.
+    for (int i = channels.length - 1; i >= 0; i--) {
+      channels[i].channelLock.unlock();
+    }
   }
 
   /**

@@ -16,20 +16,21 @@
 
 package ca.uwaterloo.flix.language.errors
 
-import ca.uwaterloo.flix.language.CompilationError
-import ca.uwaterloo.flix.language.ast.Ast.Source
-import ca.uwaterloo.flix.language.ast.{Name, SourceLocation, Symbol}
-import ca.uwaterloo.flix.util.vt.VirtualString._
-import ca.uwaterloo.flix.util.vt.VirtualTerminal
+import ca.uwaterloo.flix.language.CompilationMessage
+import ca.uwaterloo.flix.language.ast.{Ast, Name, SourceLocation, Symbol, Type, TypeConstructor}
+import ca.uwaterloo.flix.language.fmt.{Audience, FormatType, FormatTypeConstraint}
+import ca.uwaterloo.flix.util.Formatter
 
 /**
   * A common super-type for redundancy errors.
   */
-trait RedundancyError extends CompilationError {
-  def kind: String = "Redundancy Error"
+trait RedundancyError extends CompilationMessage {
+  val kind: String = "Redundancy Error"
 }
 
 object RedundancyError {
+
+  private implicit val audience: Audience = Audience.External
 
   /**
     * An error raised to indicate that the variable symbol `sym` is hidden.
@@ -38,21 +39,27 @@ object RedundancyError {
     * @param loc the source location of the use.
     */
   case class HiddenVarSym(sym: Symbol.VarSym, loc: SourceLocation) extends RedundancyError {
-    val source: Source = sym.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Hidden variable symbol '" << Red(sym.text) << "'. The symbol is marked as unused." << NewLine
-      vt << NewLine
-      vt << Code(loc, "hidden symbol.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Don't use the variable symbol." << NewLine
-      vt << "  (2)  Rename the underscore prefix from the variable symbol name." << NewLine
-      vt << NewLine
-      vt
+    def summary: String = "Hidden variable symbol."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Hidden variable symbol '${red(sym.text)}'. The symbol is marked as unused.
+         |
+         |${code(loc, "hidden symbol.")}
+         |""".stripMargin
+
     }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Don't use the variable symbol.
+         |  (2)  Rename the underscore prefix from the variable symbol name.
+         |
+         |""".stripMargin
+    })
   }
 
   /**
@@ -62,19 +69,25 @@ object RedundancyError {
     * @param sym2 the shadowing variable.
     */
   case class ShadowedVar(sym1: Symbol.VarSym, sym2: Symbol.VarSym) extends RedundancyError {
-    val source: Source = sym1.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Shadowed variable: '" << Red(sym1.text) << "'." << NewLine
-      vt << NewLine
-      vt << Code(sym2.loc, "shadowing variable.") << NewLine
-      vt << NewLine
-      vt << "The shadowed variable was declared here:" << NewLine
-      vt << NewLine
-      vt << Code(sym1.loc, "shadowed variable.") << NewLine
-      vt << NewLine
+    def summary: String = "Shadowed variable."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Shadowed variable '${red(sym1.text)}'.
+         |
+         |${code(sym2.loc, "shadowing variable.")}
+         |
+         |The shadowed variable was declared here:
+         |
+         |${code(sym1.loc, "shadowed variable.")}
+         |
+         |""".stripMargin
     }
+
+    def explain(formatter: Formatter): Option[String] = None
+
+    def loc: SourceLocation = sym1.loc min sym2.loc
   }
 
   /**
@@ -83,23 +96,29 @@ object RedundancyError {
     * @param sym the unused enum symbol.
     */
   case class UnusedDefSym(sym: Symbol.DefnSym) extends RedundancyError {
-    val source: Source = sym.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused definition '" << Red(sym.name) << "'. The definition is never referenced." << NewLine
-      vt << NewLine
-      vt << Code(sym.loc, "unused definition.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the definition." << NewLine
-      vt << "  (2)  Remove the definition." << NewLine
-      vt << "  (3)  Mark the definition as public." << NewLine
-      vt << "  (4)  Prefix the definition name with an underscore." << NewLine
-      vt << NewLine
-      vt
+    def summary: String = "Unused definition."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Unused definition '${red(sym.name)}'. The definition is never referenced.
+         |
+         |${code(sym.loc, "unused definition.")}
+         |""".stripMargin
     }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""Possible fixes:
+         |
+         |  (1)  Use the definition.
+         |  (2)  Remove the definition.
+         |  (3)  Mark the definition as public.
+         |  (4)  Prefix the definition name with an underscore.
+         |
+         |""".stripMargin
+    })
+
+    def loc: SourceLocation = sym.loc
   }
 
   /**
@@ -108,23 +127,30 @@ object RedundancyError {
     * @param sym the unused enum symbol.
     */
   case class UnusedEnumSym(sym: Symbol.EnumSym) extends RedundancyError {
-    val source: Source = sym.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused enum '" << Red(sym.name) << "'. Neither the enum nor its cases are ever used." << NewLine
-      vt << NewLine
-      vt << Code(sym.loc, "unused enum.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the enum." << NewLine
-      vt << "  (2)  Remove the enum." << NewLine
-      vt << "  (3)  Mark the enum as public." << NewLine
-      vt << "  (4)  Prefix the enum name with an underscore." << NewLine
-      vt << NewLine
-      vt
+    def summary: String = "Unused enum."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Unused enum '${red(sym.name)}'. Neither the enum nor its cases are ever used.
+         |
+         |${code(sym.loc, "unused enum.")}
+         |""".stripMargin
     }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Use the enum.
+         |  (2)  Remove the enum.
+         |  (3)  Mark the enum as public.
+         |  (4)  Prefix the enum name with an underscore.
+         |
+         |""".stripMargin
+    })
+
+    def loc: SourceLocation = sym.loc
   }
 
   /**
@@ -133,23 +159,31 @@ object RedundancyError {
     * @param sym the enum symbol.
     * @param tag the unused tag.
     */
-  case class UnusedEnumTag(sym: Symbol.EnumSym, tag: Name.Ident) extends RedundancyError {
-    val source: Source = tag.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused case '" << Red(tag.name) << "' in enum '" << Cyan(sym.name) << "'." << NewLine
-      vt << NewLine
-      vt << Code(tag.loc, "unused tag.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the case." << NewLine
-      vt << "  (2)  Remove the case." << NewLine
-      vt << "  (3)  Prefix the case with an underscore." << NewLine
-      vt << NewLine
-      vt
+  case class UnusedEnumTag(sym: Symbol.EnumSym, tag: Name.Tag) extends RedundancyError {
+    def summary: String = s"Unused case '${tag.name}'."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Unused case '${red(tag.name)}' in enum '${cyan(sym.name)}'.
+         |
+         |${code(tag.loc, "unused tag.")}
+         |""".stripMargin
+
     }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Use the case.
+         |  (2)  Remove the case.
+         |  (3)  Prefix the case with an underscore.
+         |
+         |""".stripMargin
+    })
+
+    def loc: SourceLocation = sym.loc
   }
 
   /**
@@ -158,72 +192,29 @@ object RedundancyError {
     * @param sym the unused variable symbol.
     */
   case class UnusedFormalParam(sym: Symbol.VarSym) extends RedundancyError {
-    val source: Source = sym.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused formal parameter '" << Red(sym.text) << "'. The parameter is not used within its scope." << NewLine
-      vt << NewLine
-      vt << Code(sym.loc, "unused formal parameter.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the formal parameter." << NewLine
-      vt << "  (2)  Remove the formal parameter." << NewLine
-      vt << "  (3)  Prefix the formal parameter name with an underscore." << NewLine
-      vt << NewLine
-      vt
-    }
-  }
+    def summary: String = "Unused formal parameter."
 
-  /**
-    * An error raised to indicate that the given relation symbol `sym` is not used.
-    *
-    * @param sym the unused relation symbol.
-    */
-  case class UnusedRelSym(sym: Symbol.RelSym) extends RedundancyError {
-    val source: Source = sym.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused relation '" << Red(sym.name) << "'. The relation is never referenced." << NewLine
-      vt << NewLine
-      vt << Code(sym.loc, "unused relation.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the relation." << NewLine
-      vt << "  (2)  Remove the relation." << NewLine
-      vt << "  (3)  Mark the relation as public." << NewLine
-      vt << "  (4)  Prefix the relation name with an underscore." << NewLine
-      vt << NewLine
-      vt
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Unused formal parameter '${red(sym.text)}'. The parameter is not used within its scope.
+         |
+         |${code(sym.loc, "unused formal parameter.")}
+         |""".stripMargin
     }
-  }
 
-  /**
-    * An error raised to indicate that the given lattice symbol `sym` is not used.
-    *
-    * @param sym the unused lattice symbol.
-    */
-  case class UnusedLatSym(sym: Symbol.LatSym) extends RedundancyError {
-    val source: Source = sym.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused lattice '" << Red(sym.name) << "'. The lattice is never referenced." << NewLine
-      vt << NewLine
-      vt << Code(sym.loc, "unused relation.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the lattice." << NewLine
-      vt << "  (2)  Remove the lattice." << NewLine
-      vt << "  (3)  Mark the lattice as public." << NewLine
-      vt << "  (4)  Prefix the lattice name with an underscore." << NewLine
-      vt << NewLine
-      vt
-    }
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Use the formal parameter.
+         |  (2)  Remove the formal parameter.
+         |  (3)  Prefix the formal parameter name with an underscore.
+         |
+         |""".stripMargin
+    })
+
+    def loc: SourceLocation = sym.loc
   }
 
   /**
@@ -232,22 +223,29 @@ object RedundancyError {
     * @param ident the unused type variable.
     */
   case class UnusedTypeParam(ident: Name.Ident) extends RedundancyError {
-    val source: Source = ident.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused type parameter '" << Red(ident.name) << "'. The parameter is not referenced anywhere." << NewLine
-      vt << NewLine
-      vt << Code(ident.loc, "unused type parameter.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the type parameter." << NewLine
-      vt << "  (2)  Remove type parameter." << NewLine
-      vt << "  (3)  Prefix the type parameter name with an underscore." << NewLine
-      vt << NewLine
-      vt
+    def summary: String = "Unused type parameter."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Unused type parameter '${red(ident.name)}'. The parameter is not referenced anywhere.
+         |
+         |${code(ident.loc, "unused type parameter.")}
+         |""".stripMargin
     }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Use the type parameter.
+         |  (2)  Remove type parameter.
+         |  (3)  Prefix the type parameter name with an underscore.
+         |
+         |""".stripMargin
+    })
+
+    def loc: SourceLocation = SourceLocation.mk(ident.sp1, ident.sp2)
   }
 
   /**
@@ -256,72 +254,300 @@ object RedundancyError {
     * @param sym the unused variable symbol.
     */
   case class UnusedVarSym(sym: Symbol.VarSym) extends RedundancyError {
-    val source: Source = sym.loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Unused local variable '" << Red(sym.text) << "'. The variable is not referenced within its scope." << NewLine
-      vt << NewLine
-      vt << Code(sym.loc, "unused local variable.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the local variable." << NewLine
-      vt << "  (2)  Remove local variable declaration." << NewLine
-      vt << "  (3)  Prefix the variable name with an underscore." << NewLine
-      vt << NewLine
-      vt
+    def summary: String = "Unused local variable."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Unused local variable '${red(sym.text)}'. The variable is not referenced within its scope.
+         |
+         |${code(sym.loc, "unused local variable.")}
+         |""".stripMargin
     }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Use the local variable.
+         |  (2)  Remove local variable declaration.
+         |  (3)  Prefix the variable name with an underscore.
+         |
+         |""".stripMargin
+    })
+
+    def loc: SourceLocation = sym.loc
+  }
+
+  /**
+    * An error raised to indicate that the given variable symbol `sym` is only used once in a constraint.
+    *
+    * @param sym the variable only used once
+    * @param loc the location of the error
+    */
+  case class IllegalSingleVariable(sym: Symbol.VarSym, loc: SourceLocation) extends RedundancyError {
+    def summary: String = s"Single use of variable '$sym'."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> This variable is named, but only used once '${red(sym.text)}'. Use a wildcard instead?
+         |
+         |${code(loc, "the variable occurs here.")}
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Prefix the variable name with a wildcard.
+         |  (2)  Replace the variable name with a wildcard.
+         |  (3)  Check for any spelling mistakes.
+         |
+         |""".stripMargin
+    })
   }
 
   /**
     * An error raised to indicate that an expression is useless.
     *
+    * @param tpe the type of the expression.
     * @param loc the location of the expression.
     */
-  case class UselessExpression(loc: SourceLocation) extends RedundancyError {
-    val source: Source = loc.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Useless expression: It has no side-effect(s) and its result is discarded." << NewLine
-      vt << NewLine
-      vt << Code(loc, "useless expression.") << NewLine
-      vt << NewLine
-      vt << "Possible fixes:" << NewLine
-      vt << NewLine
-      vt << "  (1)  Use the result computed by the expression." << NewLine
-      vt << "  (2)  Remove the expression statement." << NewLine
-      vt << "  (3)  Introduce a let-binding with a wildcard name." << NewLine
-      vt << NewLine
-      vt
+  case class UselessExpression(tpe: Type, loc: SourceLocation) extends RedundancyError {
+    def summary: String = "Useless expression."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Useless expression: It has no side-effect(s) and its result is discarded.
+         |
+         |${code(loc, "useless expression.")}
+         |
+         |The expression has type '${FormatType.formatWellKindedType(tpe)}'
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Use the result computed by the expression.
+         |  (2)  Remove the expression statement.
+         |  (3)  Introduce a let-binding with a wildcard name.
+         |
+         |""".stripMargin
+    })
+  }
+
+  /**
+    * An error raised to indicate that a non-unit impure expression is used as a statement.
+    *
+    * @param tpe the type of the expression.
+    * @param loc the location of the expression.
+    */
+  case class DiscardedValue(tpe: Type, loc: SourceLocation) extends RedundancyError {
+    def summary: String = "Non-unit expression value is implicitly discarded."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Unused non-unit value: The impure expression value is not used.
+         |
+         |${code(loc, "discarded value.")}
+         |
+         |The expression has type '${FormatType.formatWellKindedType(tpe)}'
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Use the result value.
+         |  (2)  Bind the value using let.
+         |  (3)  Use the discard keyword.
+         |
+         |""".stripMargin
+    })
+  }
+
+  /**
+    * An error raised to indicate that an impure function expression is useless
+    * is statement position.
+    *
+    * @param tpe the type of the expression.
+    * @param loc the location of the expression.
+    */
+  case class UnderAppliedFunction(tpe: Type, loc: SourceLocation) extends RedundancyError {
+    def summary: String = "Under applied function. Missing function argument(s)?"
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Under applied function. ${applicationAdvice(tpe)}
+         |
+         |${code(loc, "the function is not fully-applied and hence has no effect.")}
+         |
+         |The function has type '${FormatType.formatWellKindedType(tpe)}'
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Give the function (additional) arguments.
+         |  (2)  Use the result computed by the expression.
+         |  (3)  Remove the expression statement.
+         |  (4)  Introduce a let-binding with a wildcard name.
+         |
+         |""".stripMargin
+    })
+
+    /**
+      * Creates an advice string about applied the arguments of the curried arrow `tpe`.
+      *
+      * OBS: If `tpe` is not arrow type then an exception is thrown.
+      */
+    private def applicationAdvice(tpe: Type): String = {
+      val arguments = curriedArrowArgTypes(tpe)
+      if (arguments.isEmpty) { // fallback message
+        "Missing function argument(s)?"
+      } else {
+        val argumentStrings = arguments.map(t => s"${FormatType.formatWellKindedType(t)}").mkString(", ")
+        s"Missing argument(s) of type: $argumentStrings."
+      }
+    }
+
+    /**
+      * Returns the argument types of `this` curried arrow type.
+      * Returns `Nil` if `this` is not an arrow type.
+      *
+      * For example,
+      *
+      * {{{
+      * Int32                               =>     Nil
+      * Int32 -> String -> Int32            =>     List(Int32, String)
+      * (Int32, String) -> String -> Bool   =>     List(Int32, String, String)
+      * }}}
+      */
+    private def curriedArrowArgTypes(tpe: Type): List[Type] = tpe.typeConstructor match {
+      case Some(TypeConstructor.Arrow(_)) => tpe.arrowArgTypes ++ curriedArrowArgTypes(tpe.arrowResultType)
+      case _ => Nil
     }
   }
 
   /**
-    * An error raised to indicate that a pattern match is useless, i.e. cannot match because of a prior pattern match.
+    * An error raised to indicate that a purity cast is redundant.
     *
-    * @param pat  the useless pattern.
-    * @param loc1 the source location of the useless pattern.
-    * @param loc2 the source location of the previous pattern.
+    * @param loc the source location of the cast.
     */
-  case class UselessPatternMatch(pat: String, loc1: SourceLocation, loc2: SourceLocation) extends RedundancyError {
-    val source: Source = loc2.source
-    val message: VirtualTerminal = {
-      val vt = new VirtualTerminal
-      vt << Line(kind, source.format) << NewLine
-      vt << ">> Useless pattern match due to prior pattern match." << NewLine
-      vt << NewLine
-      vt << Code(loc1, "useless match.") << NewLine
-      vt << NewLine
-      vt << s"The match value is: '" << Cyan(pat) << "' which is incompatible with current pattern." << NewLine
-      vt << NewLine
-      vt << "The previous pattern match was here:" << NewLine
-      vt << NewLine
-      vt << Code(loc2, "previous match.") << NewLine
-      vt << NewLine
-      vt
+  case class RedundantPurityCast(loc: SourceLocation) extends RedundancyError {
+    def summary: String = "Redundant purity cast. The expression is already pure."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Redundant purity cast. The expression is already pure.
+         |
+         |${code(loc, "redundant cast.")}
+         |
+         |""".stripMargin
     }
+
+    def explain(formatter: Formatter): Option[String] = None
+  }
+
+  /**
+    * An error raised to indicate that an effect cast is redundant.
+    *
+    * @param loc the source location of the cast.
+    */
+  case class RedundantEffectCast(loc: SourceLocation) extends RedundancyError {
+    def summary: String = "Redundant effect cast. The expression already has the same effect."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Redundant effect cast. The expression already has the same effect.
+         |
+         |${code(loc, "redundant cast.")}
+         |
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = None
+  }
+
+  /**
+    * An error raised to indicate a redundant type constraint.
+    *
+    * @param entailingTconstr the tconstr that entails the other.
+    * @param redundantTconstr the tconstr that is made redundant by the other.
+    * @param loc              the location where the error occured.
+    */
+  case class RedundantTypeConstraint(entailingTconstr: Ast.TypeConstraint, redundantTconstr: Ast.TypeConstraint, loc: SourceLocation) extends RedundancyError {
+    def summary: String = "Redundant type constraint."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Type constraint '${red(FormatTypeConstraint.formatTypeConstraint(redundantTconstr))}' is entailed by type constraint '${green(FormatTypeConstraint.formatTypeConstraint(redundantTconstr))}'.
+         |
+         |${code(loc, "redundant type constraint.")}
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = Some({
+      s"""
+         |Possible fixes:
+         |
+         |  (1)  Remove the type constraint.
+         |
+         |""".stripMargin
+    })
+  }
+
+  /**
+    * An error raised to indicate that the result of a pure expression is discarded.
+    *
+    * @param loc the location of the inner expression.
+    */
+  case class DiscardedPureValue(loc: SourceLocation) extends RedundancyError {
+    def summary: String = "A pure expression cannot be discarded."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> A pure expression cannot be discarded.
+         |
+         |${code(loc, "pure expression.")}
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = None
+  }
+
+  /**
+    * An error raised to indicate a redundant discard of a unit value.
+    *
+    * @param loc the location of the inner expression.
+    */
+  case class RedundantDiscard(loc: SourceLocation) extends RedundancyError {
+    def summary: String = "Redundant discard of unit value."
+
+    def message(formatter: Formatter): String = {
+      import formatter._
+      s"""${line(kind, source.name)}
+         |>> Redundant discard of unit value.
+         |
+         |${code(loc, "discarded unit value.")}
+         |""".stripMargin
+    }
+
+    def explain(formatter: Formatter): Option[String] = None
   }
 
 }

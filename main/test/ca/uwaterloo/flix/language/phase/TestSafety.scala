@@ -17,69 +17,167 @@
 package ca.uwaterloo.flix.language.phase
 
 import ca.uwaterloo.flix.TestUtils
-import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.errors.SafetyError.IllegalNonPositivelyBoundVariable
+import ca.uwaterloo.flix.language.errors.SafetyError.{IllegalNegativelyBoundWildVariable, IllegalNegativelyBoundWildcard, IllegalNonPositivelyBoundVariable, IllegalRelationalUseOfLatticeVariable}
+import ca.uwaterloo.flix.util.Options
 import org.scalatest.FunSuite
 
 class TestSafety extends FunSuite with TestUtils {
 
+  val DefaultOptions: Options = Options.TestWithLibMin
+
   test("NonPositivelyBoundVariable.01") {
     val input =
       """
-        |rel A(x: Int)
-        |rel B(x: Int)
-        |
-        |def main(): #{ A, B } = solve {
+        |pub def f(): #{ A(Int32), B(Int32) } = #{
         |    A(x) :- not B(x).
         |}
-        |
       """.stripMargin
-    expectError[IllegalNonPositivelyBoundVariable](new Flix().addStr(input).compile())
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNonPositivelyBoundVariable](result)
   }
 
   test("NonPositivelyBoundVariable.02") {
     val input =
       """
-        |rel A(x: Int)
-        |rel B(x: Int)
-        |rel R(k: Int)
-        |
-        |def main(): #{ A, B, R } = solve {
-        |    R(x) :- A(x), not B(y).
+        |pub def f(): #{ A(Int32), B(Int32), R(Int32) } = solve #{
+        |    R(x) :- not A(x), not B(x).
         |}
-        |
-      """.stripMargin
-    expectError[IllegalNonPositivelyBoundVariable](new Flix().addStr(input).compile())
+    """.stripMargin
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNonPositivelyBoundVariable](result)
   }
 
   test("NonPositivelyBoundVariable.03") {
     val input =
       """
-        |rel A(x: Int)
-        |rel B(x: Int)
-        |rel R(k: Int)
-        |
-        |def main(): #{ A, B, R } = solve {
-        |    R(x) :- not A(x), not B(x).
+        |pub def f(): #{ A(Int32), B(Int32), R(Int32) } = #{
+        |    R(x) :- not A(x), B(12), if x > 5.
         |}
-        |
-      """.stripMargin
-    expectError[IllegalNonPositivelyBoundVariable](new Flix().addStr(input).compile())
+    """.stripMargin
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNonPositivelyBoundVariable](result)
   }
 
-  test("NonPositivelyBoundVariable.04") {
+  test("NegativelyBoundWildVariable.01") {
     val input =
       """
-        |rel A(x: Int)
-        |rel B(x: Int)
-        |rel R(k: Int)
-        |
-        |def main(): #{ A, B, R } = solve {
-        |    R(1) :- not A(x), not B(y).
+        |pub def f(): #{ A(Int32), B(Int32), R(Int32) } = #{
+        |    R(x) :- A(x), not B(_y).
         |}
-        |
       """.stripMargin
-    expectError[IllegalNonPositivelyBoundVariable](new Flix().addStr(input).compile())
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNegativelyBoundWildVariable](result)
+  }
+
+
+  test("NegativelyBoundWildVariable.02") {
+    val input =
+      """
+        |pub def f(): #{ A(Int32), B(Int32), R(Int32) } = solve #{
+        |    R(1) :- not A(_x), not B(_y).
+        |}
+      """.stripMargin
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNegativelyBoundWildVariable](result)
+  }
+
+  test("NegativelyBoundWildVariable.03") {
+    val input =
+      """
+        |pub def f(): #{ A(Int32), B(Int32), R(Int32) } = #{
+        |    R(1) :- A(y), not A(_y), not B(y).
+        |}
+      """.stripMargin
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNegativelyBoundWildVariable](result)
+  }
+
+  test("NegativelyBoundWildcard.01") {
+    val input =
+      """
+        |pub def f(): #{ A(Int32), B(Int32) } = #{
+        |    A(1) :- not B(_).
+        |}
+      """.stripMargin
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNegativelyBoundWildcard](result)
+  }
+
+  test("NegativelyBoundWildcard.02") {
+    val input =
+      """
+        |pub def f(): #{ A(Int32), B(Int32) } = solve #{
+        |    A(1) :- not B(_), A(_).
+        |}
+      """.stripMargin
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNegativelyBoundWildcard](result)
+  }
+
+  test("NegativelyBoundWildcard.03") {
+    val input =
+      """
+        |pub def f(): #{ A(Int32), B(Int32) } = #{
+        |    A(1) :- not B(z), A(z), not B(_).
+        |}
+      """.stripMargin
+    val result = compile(input, DefaultOptions)
+    expectError[IllegalNegativelyBoundWildcard](result)
+  }
+
+  test("UseOfLatticeVariable.01") {
+    val input =
+      """
+        |pub def f(): #{ A(Int32), B(Int32; Int32) } = #{
+        |    A(x: Int32) :- B(12; x).
+        |}
+      """.stripMargin
+    val result = compile(input, Options.TestWithLibAll)
+    expectError[IllegalRelationalUseOfLatticeVariable](result)
+  }
+
+  test("UseOfLatticeVariable.02") {
+    val input =
+      """
+        |pub def f(): #{A(Int32), B(Int32; Int32), C(Int32, Int32) } = #{
+        |    A(x) :- B(x; l), C(x, l).
+        |}
+        |""".stripMargin
+    val result = compile(input, Options.TestWithLibAll)
+    expectError[IllegalRelationalUseOfLatticeVariable](result)
+  }
+
+  test("UseOfLatticeVariable.03") {
+    val input =
+      """
+        |pub def f(): #{A(Int32; Int32), B(Int32; Int32), C(Int32, Int32) } = #{
+        |    A(x; l) :- B(x; l), C(x, l).
+        |}
+        |""".stripMargin
+    val result = compile(input, Options.TestWithLibAll)
+    expectError[IllegalRelationalUseOfLatticeVariable](result)
+  }
+
+  test("UseOfLatticeVariable.04") {
+    val input =
+      """
+        |pub def f(): #{A(Int32, Int32), B(Int32; Int32), C(Int32; Int32) } = #{
+        |    A(12, l) :- B(12; l), fix C(12; l).
+        |}
+        |""".stripMargin
+    val result = compile(input, Options.TestWithLibAll)
+    expectError[IllegalRelationalUseOfLatticeVariable](result)
+  }
+
+  test("UseOfLatticeVariable.05") {
+    val input =
+      """
+        |pub def f(): #{A(Int32), B(Int32, Int32), C(Int32; Int32) } = #{
+        |    A(12) :- B(12, l), fix C(12; l).
+        |}
+        |""".stripMargin
+    val result = compile(input, Options.TestWithLibAll)
+    expectError[IllegalRelationalUseOfLatticeVariable](result)
   }
 
 }

@@ -1,34 +1,39 @@
 @test
-def testDaysTimer01(): Bool = select {
-    case _ <- Timer.days(0i64) => true
+def testDaysTimer01(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.days(0i64) => true
 }
 
 @test
-def testHoursTimer01(): Bool = select {
-    case _ <- Timer.hours(0i64) => true
+def testHoursTimer01(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.hours(0i64) => true
 }
 
 @test
-def testMinutesTimer01(): Bool = select {
-    case _ <- Timer.minutes(0i64) => true
+def testMinutesTimer01(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.minutes(0i64) => true
 }
 
 @test
-def testSecondsTimer01(): Bool = select {
-    case _ <- Timer.seconds(0i64) => true
+def testSecondsTimer01(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.seconds(0i64) => true
 }
 
 @test
-def testMillisecondsTimer01(): Bool = select {
-    case _ <- Timer.milliseconds(0i64) => true
+def testMillisecondsTimer01(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.milliseconds(0i64) => true
 }
 
 @test
-def testMicrosecondsTimer01(): Bool = select {
-    case _ <- Timer.microseconds(0i64) => true
+def testMicrosecondsTimer01(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.microseconds(0i64) => true
 }
 
 @test
-def testNanosecondsTimer01(): Bool = select {
-    case _ <- Timer.nanoseconds(0i64) => true
+def testNanosecondsTimer01(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.nanoseconds(0i64) => true
+}
+
+@test
+def testNanosecondsTimer02(): Bool & Impure = select {
+    case _ <- Concurrent/Channel/Timer.nanoseconds(999999i64) => true
 }

@@ -16,18 +16,28 @@
 
 package ca.uwaterloo.flix.language.phase
 
-import org.scalatest.{ParallelTestExecution, Suites}
+import ca.uwaterloo.flix.language.phase.unification.{TestBoolTable, TestSetUnification, TestUnification}
+import org.scalatest.Suites
 
 class PhaseSuite extends Suites(
+  // phases
+  new TestEntryPoint,
+  new TestInstances,
+  new TestKinder,
   new TestNamer,
+  new TestParser,
   new TestPatExhaustiveness,
   new TestRedundancy,
+  new TestRegions,
   new TestResolver,
   new TestSafety,
   new TestStratifier,
-  new TestTrivial,
-  new TestUnification,
-  new TestWeeder
-) with ParallelTestExecution {
-  /* left empty */
-}
+  new TestTyper,
+  new TestWeeder,
+
+  // helpers
+  new TestBoolTable,
+  new TestIncremental,
+  new TestSetUnification,
+  new TestUnification
+)

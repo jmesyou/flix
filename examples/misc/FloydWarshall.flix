@@ -2,71 +2,54 @@
 // for finding shortest paths between all pairs of nodes in a graph.
 
 // Inputs: Directed distances d between nodes a and b
-rel Edge(a: Str, b: Str, d: Int)
+rel Edge(a: String, b: String, d: Int32)
 
 // Outputs: Shortest distance d from a to b
-lat ShortestDist(a: Str, b: Str, d: Dist)
+lat ShortestDist(a: String, b: String, d: Dist)
 
 // Elements of the distance lattice
-enum Dist {
-  case Top,      // Reachable from a negative-cost cycle
-  case Dst(Int), // Reachable with some minimum distance
-  case Bot       // Not reachable
+enum Dist with Eq, Order, ToString {
+  case Bot,      // Not reachable
+  case Dst(Int32), // Reachable with some minimum distance
+  case Top       // Reachable from a negative-cost cycle
 }
 
-// Lattice operations
-
-///
-/// Returns `true` iff `e1` is equal to `e2`.
-///
-def equ(e1: Dist, e2: Dist): Bool = e1 == e2
-
-///
-/// Returns `true` if the distance `e1` is greater than or equal to the distance `e2`.
-///
-def leq(e1: Dist, e2: Dist): Bool = match (e1, e2) with {
-  case (_, Top) => true
-  case (Bot, _) => true
-  case (Dst(n1), Dst(n2)) => n1 >= n2
-  case _ => false
+instance LowerBound[Dist] {
+    pub def minValue(): Dist = Dist.Bot
 }
 
-///
-/// Returns the shorter distance of `e1` and `e2`.
-///
-def lub(e1: Dist, e2: Dist): Dist = match (e1, e2) with {
-  case (Bot, x) => x
-  case (x, Bot) => x
-  case (Dst(n1), Dst(n2)) => Dst(Int32.min(n1, n2))
-  case _ => Top
+instance PartialOrder[Dist] {
+    pub def lessEqual(x: Dist, y: Dist): Bool = match (x, y) {
+        case (_, Top) => true
+        case (Bot, _) => true
+        case (Dst(n1), Dst(n2)) => n1 >= n2
+        case _ => false
+    }
 }
 
-///
-/// Returns the greater distance of `e1` and `e2`.
-///
-def glb(e1: Dist, e2: Dist): Dist = match (e1, e2) with {
-  case (Top, x) => x
-  case (x, Top) => x
-  case (Dst(n1), Dst(n2)) => Dst(Int32.max(n1, n2))
-  case _ => Bot
+instance JoinLattice[Dist] {
+    pub def leastUpperBound(x: Dist, y: Dist): Dist = match (x, y) {
+        case (Bot, _)           => y
+        case (_, Bot)           => x
+        case (Dst(n1), Dst(n2)) => Dst(Int32.min(n1, n2))
+        case _                  => Top
+    }
 }
 
-let Dist<> = (Bot, Top, equ, leq, lub, glb)
-
-// Copy input relation into the ShortestDist lattice
-ShortestDist(a, b, Dst(d)) :- Edge(a, b, d).
-
-// If a->b->c, try using that to get a->c
-ShortestDist(a, c, sum(d1, d2)) :- ShortestDist(a, b, d1), ShortestDist(b, c, d2).
-
-// If you can get from a->a with negative distance, then it is part of a negative cycle
-ShortestDist(a, a, Top) :- ShortestDist(a, a, d), negativeDist(d).
+instance MeetLattice[Dist] {
+    pub def greatestLowerBound(x: Dist, y: Dist): Dist = match (x, y) {
+        case (Top, z) => z
+        case (z, Top) => z
+        case (Dst(n1), Dst(n2)) => Dst(Int32.max(n1, n2))
+        case _ => Bot
+    }
+}
 
 ///
 /// Transfer function.
 /// Returns the sum of two given distances.
 ///
-def sum(e1: Dist, e2: Dist): Dist = match (e1, e2) with {
+def sum(e1: Dist, e2: Dist): Dist = match (e1, e2) {
   case (Top, _) => Top
   case (_, Top) => Top
   case (Dst(n1), Dst(n2)) => Dst(n1 + n2)
@@ -77,26 +60,41 @@ def sum(e1: Dist, e2: Dist): Dist = match (e1, e2) with {
 /// Filter function.
 /// Returns `true` if the given distance `d` is negative.
 ///
-def negativeDist(d: Dist): Bool = match d with {
+def negativeDist(d: Dist): Bool = match d {
   case Top => true
   case Dst(x) => x < 0
   case _ => false
 }
 
-// Example input data
-Edge("a", "b", 1).
-Edge("b", "c", 2).
-Edge("c", "a", 3).
-Edge("c", "d", 4).
-Edge("d", "e", 7).
-Edge("d", "f", 11).
-Edge("f", "e", 23).
+def main(): Unit & Impure =
+    let p = #{
+        // Copy input relation into the ShortestDist lattice
+        ShortestDist(a, b; Dst(d)) :- Edge(a, b, d).
 
-// Negative cycle
-Edge("1", "2", -3).
-Edge("2", "3", 1).
-Edge("3", "1", 1).
-Edge("3", "4", 30).
+        // If a->b->c, try using that to get a->c
+        ShortestDist(a, c; sum(d1, d2)) :- ShortestDist(a, b; d1), ShortestDist(b, c; d2).
+
+        // If you can get from a->a with negative distance, then it is part of a negative cycle
+        ShortestDist(a, a; Top) :- ShortestDist(a, a; d), if negativeDist(d).
+
+        // Example input data
+        Edge("a", "b", 1).
+        Edge("b", "c", 2).
+        Edge("c", "a", 3).
+        Edge("c", "d", 4).
+        Edge("d", "e", 7).
+        Edge("d", "f", 11).
+        Edge("f", "e", 23).
+
+        // Negative cycle
+        Edge("1", "2", -3).
+        Edge("2", "3", 1).
+        Edge("3", "1", 1).
+        Edge("3", "4", 30).
+    };
+    let m = solve p;
+    Fixpoint.unsafePrint(m);
+    ()
 
 // Expected output
 // ShortestDist

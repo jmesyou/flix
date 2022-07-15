@@ -17,7 +17,6 @@
 package ca.uwaterloo.flix.util
 
 import scala.collection.mutable
-import scala.collection.parallel.CollectionConverters._
 
 sealed trait Validation[+T, +E] {
 
@@ -46,6 +45,7 @@ sealed trait Validation[+T, +E] {
     *
     * Preserves the errors.
     */
+    // Deprecated. Use flatMapN instead.
   final def flatMap[U, A >: E](f: T => Validation[U, A]): Validation[U, A] = this match {
     case Validation.Success(input) => f(input) match {
       case Validation.Success(value) => Validation.Success(value)
@@ -98,9 +98,23 @@ object Validation {
   }
 
   /**
+    * Sequences the given list of validations `xs`, ignoring non-error results.
+    */
+  def sequenceX[T, E](xs: Iterable[Validation[T, E]]): Validation[Unit, E] = {
+    sequence(xs).map(_ => ())
+  }
+
+  /**
     * Traverses `xs` applying the function `f` to each element.
     */
   def traverse[T, S, E](xs: Iterable[T])(f: T => Validation[S, E]): Validation[List[S], E] = fastTraverse(xs)(f)
+
+  /**
+    * Traverses `xs` applying the function `f` to each element, ignoring non-error results.
+    */
+  def traverseX[T, E](xs: Iterable[T])(f: T => Validation[_, E]): Validation[Unit, E] = {
+    traverse(xs)(f).map(_ => ())
+  }
 
   /**
     * A fast implementation of traverse.
@@ -128,23 +142,6 @@ object Validation {
     } else {
       Failure(failureStream.foldLeft(LazyList.empty[E])(_ #::: _))
     }
-  }
-
-  /**
-    * Traverses `xs` in parallel applying the function `f` to each element.
-    */
-  def parTraverse[T, S, E](xs: Iterable[T])(f: T => Validation[S, E]): Validation[List[S], E] = {
-    @inline
-    def seq(x: Vector[Validation[S, E]], y: T): Vector[Validation[S, E]] = x :+ f(y)
-
-    @inline
-    def com(x: Vector[Validation[S, E]], y: Vector[Validation[S, E]]): Vector[Validation[S, E]] = x ++ y
-
-    // The sequence of validations.
-    val validations = xs.par.aggregate(Vector.empty[Validation[S, E]])(seq, com)
-
-    // Merge them into one validation.
-    sequence(validations)
   }
 
   /**
@@ -224,6 +221,30 @@ object Validation {
     }
 
   /**
+    * Maps over t1, t2, t3, t4, t5, t6, t7, and t8.
+    */
+  def mapN[T1, T2, T3, T4, T5, T6, T7, T8, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                                 t4: Validation[T4, E], t5: Validation[T5, E], t6: Validation[T6, E],
+                                                 t7: Validation[T7, E], t8: Validation[T8, E])
+                                                 (f: (T1, T2, T3, T4, T5, T6, T7, T8) => U): Validation[U, E] =
+    (t1, t2, t3, t4, t5, t6, t7, t8) match {
+      case (Success(v1), Success(v2), Success(v3), Success(v4), Success(v5), Success(v6), Success(v7), Success(v8)) => Success(f(v1, v2, v3, v4, v5, v6, v7, v8))
+      case _ => Failure(t1.errors #::: t2.errors #::: t3.errors #::: t4.errors #::: t5.errors #::: t6.errors #::: t7.errors #::: t8.errors)
+    }
+
+  /**
+    * Maps over t1, t2, t3, t4, t5, t6, t7, t8, and t9.
+    */
+  def mapN[T1, T2, T3, T4, T5, T6, T7, T8, T9, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                                 t4: Validation[T4, E], t5: Validation[T5, E], t6: Validation[T6, E],
+                                                 t7: Validation[T7, E], t8: Validation[T8, E], t9: Validation[T9, E])
+                                                 (f: (T1, T2, T3, T4, T5, T6, T7, T8, T9) => U): Validation[U, E] =
+    (t1, t2, t3, t4, t5, t6, t7, t8, t9) match {
+      case (Success(v1), Success(v2), Success(v3), Success(v4), Success(v5), Success(v6), Success(v7), Success(v8), Success(v9)) => Success(f(v1, v2, v3, v4, v5, v6, v7, v8, v9))
+      case _ => Failure(t1.errors #::: t2.errors #::: t3.errors #::: t4.errors #::: t5.errors #::: t6.errors #::: t7.errors #::: t8.errors #::: t9.errors)
+    }
+
+  /**
     * FlatMaps over t1.
     */
   def flatMapN[T1, U, E](t1: Validation[T1, E])(f: T1 => Validation[U, E]): Validation[U, E] =
@@ -253,11 +274,95 @@ object Validation {
     }
 
   /**
+    * FlatMaps over t1, t2, t3, and t4.
+    */
+  def flatMapN[T1, T2, T3, T4, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                     t4: Validation[T4, E])
+                                    (f: (T1, T2, T3, T4) => Validation[U, E]): Validation[U, E] =
+    (t1, t2, t3, t4) match {
+      case (Success(v1), Success(v2), Success(v3), Success(v4)) => f(v1, v2, v3, v4)
+      case _ => Failure(t1.errors #::: t2.errors #::: t3.errors #::: t4.errors)
+    }
+
+  /**
+    * FlatMaps over t1, t2, t3, t4, and t5.
+    */
+  def flatMapN[T1, T2, T3, T4, T5, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                         t4: Validation[T4, E], t5: Validation[T5, E])
+                                        (f: (T1, T2, T3, T4, T5) => Validation[U, E]): Validation[U, E] =
+    (t1, t2, t3, t4, t5) match {
+      case (Success(v1), Success(v2), Success(v3), Success(v4), Success(v5)) => f(v1, v2, v3, v4, v5)
+      case _ => Failure(t1.errors #::: t2.errors #::: t3.errors #::: t4.errors #::: t5.errors)
+    }
+
+  /**
+    * FlatMaps over t1, t2, t3, t4, t5, and t6.
+    */
+  def flatMapN[T1, T2, T3, T4, T5, T6, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                             t4: Validation[T4, E], t5: Validation[T5, E], t6: Validation[T6, E])
+                                             (f: (T1, T2, T3, T4, T5, T6) => Validation[U, E]): Validation[U, E] =
+    (t1, t2, t3, t4, t5, t6) match {
+      case (Success(v1), Success(v2), Success(v3), Success(v4), Success(v5), Success(v6)) => f(v1, v2, v3, v4, v5, v6)
+      case _ => Failure(t1.errors #::: t2.errors #::: t3.errors #::: t4.errors #::: t5.errors #::: t6.errors)
+    }
+
+  /**
+    * FlatMaps over t1, t2, t3, t4, t5, and t6.
+    */
+  def flatMapN[T1, T2, T3, T4, T5, T6, T7, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                                 t4: Validation[T4, E], t5: Validation[T5, E], t6: Validation[T6, E],
+                                                 t7: Validation[T7, E])
+                                                 (f: (T1, T2, T3, T4, T5, T6, T7) => Validation[U, E]): Validation[U, E] =
+    (t1, t2, t3, t4, t5, t6, t7) match {
+      case (Success(v1), Success(v2), Success(v3), Success(v4), Success(v5), Success(v6), Success(v7)) => f(v1, v2, v3, v4, v5, v6, v7)
+      case _ => Failure(t1.errors #::: t2.errors #::: t3.errors #::: t4.errors #::: t5.errors #::: t6.errors #::: t7.errors)
+    }
+
+  /**
+    * Sequences over t1, t2, and t3.
+    */
+  def sequenceT[T1, T2, T3, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E]): Validation[(T1, T2, T3), E] =
+    mapN(t1, t2, t3)(Function.untupled(identity))
+
+  /**
+    * Sequences over t1, t2, t3, and t4.
+    */
+  def sequenceT[T1, T2, T3, T4, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                      t4: Validation[T4, E]): Validation[(T1, T2, T3, T4), E] =
+    mapN(t1, t2, t3, t4)(Function.untupled(identity))
+
+  /**
+    * Sequences over t1, t2, t3, t4, and t5.
+    */
+  def sequenceT[T1, T2, T3, T4, T5, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                          t4: Validation[T4, E], t5: Validation[T5, E]): Validation[(T1, T2, T3, T4, T5), E] =
+    mapN(t1, t2, t3, t4, t5)(Function.untupled(identity))
+
+  /**
+    * Sequences over t1, t2, t3, t4, t5, and t6.
+    */
+  def sequenceT[T1, T2, T3, T4, T5, T6, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                              t4: Validation[T4, E], t5: Validation[T5, E], t6: Validation[T6, E]): Validation[(T1, T2, T3, T4, T5, T6), E] =
+    mapN(t1, t2, t3, t4, t5, t6) {
+      case (u1, u2, u3, u4, u5, u6) => (u1, u2, u3, u4, u5, u6)
+    }
+
+  /**
+    * Sequences over t1, t2, t3, t4, t5, and t6.
+    */
+  def sequenceT[T1, T2, T3, T4, T5, T6, T7, U, E](t1: Validation[T1, E], t2: Validation[T2, E], t3: Validation[T3, E],
+                                                  t4: Validation[T4, E], t5: Validation[T5, E], t6: Validation[T6, E],
+                                                  t7: Validation[T7, E]): Validation[(T1, T2, T3, T4, T5, T6, T7), E] =
+    mapN(t1, t2, t3, t4, t5, t6, t7) {
+      case (u1, u2, u3, u4, u5, u6, u7) => (u1, u2, u3, u4, u5, u6, u7)
+    }
+
+  /**
     * Folds Right over `xs` using the function `f` with the initial value `zero`.
     */
   def foldRight[T, U, E](xs: Seq[T])(zero: Validation[U, E])(f: (T, U) => Validation[U, E]): Validation[U, E] = {
     xs.foldRight(zero) {
-      case (a, acc) => acc flatMap {
+      case (a, acc) => flatMapN(acc) {
         case v => f(a, v)
       }
     }
@@ -284,9 +389,9 @@ object Validation {
     *
     * Returns a sequence of successful elements wrapped in [[Success]].
     */
-  def fold[In, Out, Error](xs: Seq[In], zero: Out)(f: (Out, In) => Validation[Out, Error]): Validation[Out, Error] = {
+  def fold[In, Out, Error](xs: Iterable[In], zero: Out)(f: (Out, In) => Validation[Out, Error]): Validation[Out, Error] = {
     xs.foldLeft(Success(zero): Validation[Out, Error]) {
-      case (acc, a) => acc flatMap {
+      case (acc, a) => flatMapN(acc) {
         case value => f(value, a)
       }
     }

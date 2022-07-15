@@ -16,51 +16,119 @@
 
 package ca.uwaterloo.flix.language.ast
 
-import ca.uwaterloo.flix.util.tc.Show
+import ca.uwaterloo.flix.language.fmt.FormatKind
+
+import scala.annotation.tailrec
 
 /**
   * A kind represents the "type" of a type expression.
   */
-trait Kind {
+sealed trait Kind {
 
-  def ->(that: Kind): Kind = Kind.Arrow(List(this), that)
+  /**
+    * Constructs an arrow kind.
+    *
+    * This is a right-associative operator, i.e., the following two kinds are equivalent:
+    *
+    *   - `Kind.Star ->: Kind.Star ->: Kind.Star`
+    *   - `Kind.Star ->: (Kind.Star ->: Kind.Star)`
+    */
+  def ->:(left: Kind): Kind = Kind.Arrow(left, this)
 
-  override def toString: String = Kind.ShowInstance.show(this)
+  /**
+    * Returns a human readable representation of `this` kind.
+    */
+  override def toString: String = FormatKind.formatKind(this)
+
 
 }
 
 object Kind {
 
   /**
-    * The kind of all nullary type expressions.
+    * Represents a wild kind.
+    * A wild kind exists during the kinding phase, but should be eliminated before the following phase,
+    * unless the kind is deemed irrelevant (e.g. the kind of a wildcard type).
     */
-  object Star extends Kind
-
-  object Nat extends Kind
+  case object Wild extends Kind
 
   /**
-    * The kind of type expressions that take a sequence of kinds `kparams` to a kind `kr`.
+    * Represents the wildcard kind only matching Bool and Effect.
+    * A wild kind exists during the kinding phase, but should be eliminated before the following phase,
+    * unless the kind is deemed irrelevant (e.g. the kind of a wildcard type).
     */
-  case class Arrow(kparams: List[Kind], kr: Kind) extends Kind {
-    assert(kparams.nonEmpty)
-  }
-
-  /////////////////////////////////////////////////////////////////////////////
-  // Type Class Instances                                                    //
-  /////////////////////////////////////////////////////////////////////////////
+  case object Beef extends Kind
 
   /**
-    * Show instance for Type.
+    * Represents the kind of types.
     */
-  implicit object ShowInstance extends Show[Kind] {
-    def show(a: Kind): String = a match {
-      case Kind.Star => "*"
-      case Kind.Nat => "Nat"
-      case Kind.Arrow(List(Kind.Star), Kind.Star) => "* -> *"
-      case Kind.Arrow(List(Kind.Star), kr) => s"* -> ($kr)"
-      case Kind.Arrow(kparams, Kind.Star) => s"(${kparams.mkString(", ")}) -> *"
-      case Kind.Arrow(kparams, kr) => s"(${kparams.mkString(", ")}) -> ($kr)"
+  case object Star extends Kind
+
+  /**
+    * Represents the kind of boolean formulas.
+    */
+  case object Bool extends Kind
+
+  /**
+    * Represents the kind of effect sets.
+    */
+  case object Effect extends Kind
+
+  /**
+    * Represents the kind of record rows.
+    */
+  case object RecordRow extends Kind
+
+  /**
+    * Represents the kind of schema rows.
+    */
+  case object SchemaRow extends Kind
+
+  /**
+    * Represents the kind of predicates.
+    */
+  case object Predicate extends Kind
+
+  /**
+    * Represents the kind of type expressions `k1 -> k2`.
+    */
+  case class Arrow(k1: Kind, k2: Kind) extends Kind
+
+  /**
+    * Returns the kind: * -> (* ... -> *)
+    */
+  def mkArrow(length: Int): Kind = {
+    if (length == 0) {
+      return Star
+    }
+
+    (0 until length).foldRight(Star: Kind) {
+      case (_, acc) => Arrow(Star, acc)
     }
   }
 
+  /**
+    * Returns the kind: k1 -> (k2 ... -> kn) for the given list of kinds `ks`.
+    */
+  def mkArrow(ks: List[Kind]): Kind = ks match {
+    case Nil => Star
+    case x :: xs => Arrow(x, mkArrow(xs))
+  }
+
+  /**
+    * Returns the base of an arrow kind.
+    */
+  @tailrec
+  def base(k: Kind): Kind = k match {
+    case Arrow(k1, _) => base(k1)
+    case _ => k
+  }
+
+  /**
+    * Returns the arguments of an arrow kind.
+    */
+  def kindArgs(k: Kind): List[Kind] = k match {
+    case Arrow(k1, k2) => k1 :: kindArgs(k2)
+    case _ => Nil
+  }
 }

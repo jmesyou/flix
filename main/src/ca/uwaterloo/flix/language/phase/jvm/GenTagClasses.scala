@@ -17,7 +17,7 @@
 package ca.uwaterloo.flix.language.phase.jvm
 
 import ca.uwaterloo.flix.api.Flix
-import ca.uwaterloo.flix.language.ast.FinalAst.Root
+import ca.uwaterloo.flix.language.ast.ErasedAst.Root
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Opcodes._
 
@@ -109,7 +109,7 @@ object GenTagClasses {
     val visitor = AsmOps.mkClassWriter()
 
     // The super class of the generated class.
-    val superClass = JvmName.Object.toInternalName
+    val superClass = BackendObjType.JavaObject.jvmName.toInternalName
 
     // The interfaces implemented by the generated class.
     val implementedInterfaces = Array(superType.name.toInternalName)
@@ -186,7 +186,7 @@ object GenTagClasses {
     constructor.visitVarInsn(ALOAD, 0)
 
     // Call the super (java.lang.Object) constructor
-    constructor.visitMethodInsn(INVOKESPECIAL, JvmName.Object.toInternalName, "<init>",
+    constructor.visitMethodInsn(INVOKESPECIAL, BackendObjType.JavaObject.jvmName.toInternalName, "<init>",
       AsmOps.getMethodDescriptor(Nil, JvmType.Void), false)
 
     // Load instruction for type of `value`
@@ -238,9 +238,7 @@ object GenTagClasses {
     method.visitInsn(DUP)
 
     // Getting instance of `UnitClass`
-    method.visitMethodInsn(INVOKESTATIC, JvmName.Runtime.Value.Unit.toInternalName, "getInstance",
-      AsmOps.getMethodDescriptor(Nil, JvmType.Unit), false)
-
+    method.visitFieldInsn(GETSTATIC, BackendObjType.Unit.jvmName.toInternalName, BackendObjType.Unit.InstanceField.name, BackendObjType.Unit.jvmName.toDescriptor)
     // Calling constructor on the object
     method.visitMethodInsn(INVOKESPECIAL, classType.name.toInternalName, "<init>",
       AsmOps.getMethodDescriptor(List(JvmType.Object), JvmType.Void), false)

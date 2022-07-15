@@ -9,7 +9,7 @@ namespace Domain/ParitySign {
     /// NB: This figure is slightly misleading, because ONeg !<= ENeg and OPos !<= EPos.
     ///
     // TODO: Consider how to re-implement this.
-    enum ParitySign {
+    enum ParitySign with Eq {
                               case Top,
             // TODO: Introduce Odd/Even and Pos/Neg?
                        case ENeg,    case EPos,
@@ -22,12 +22,12 @@ namespace Domain/ParitySign {
     ///
     /// Returns `true` iff `e1` is equal to `e2`.
     ///
-    def equ(e1: ParitySign, e2: ParitySign): Bool = e1 == e2
+    pub def equ(e1: ParitySign, e2: ParitySign): Bool = e1 == e2
 
     ///
     /// Returns `true` iff `e1` is less than or equal to `e2`.
     ///
-    def leq(x: ParitySign, y: ParitySign): Bool = match (x, y) with {
+    pub def leq(x: ParitySign, y: ParitySign): Bool = match (x, y) {
         case (Bot, _)       => true
         case (ONeg, ONeg)   => true
         case (Zer, Zer)     => true
@@ -43,7 +43,7 @@ namespace Domain/ParitySign {
     ///
     /// Returns the least upper bound of `e1` and `e2`.
     ///
-    def lub(e1: ParitySign, e2: ParitySign): ParitySign = match (e1, e2) with {
+    pub def lub(e1: ParitySign, e2: ParitySign): ParitySign = match (e1, e2) {
         case (Bot, x)       => x
         case (x, Bot)       => x
         case (ONeg, ONeg)   => ONeg
@@ -61,7 +61,7 @@ namespace Domain/ParitySign {
     ///
     /// Returns the greatest lower bound of `e1` and `e2`.
     ///
-    def glb(e1: ParitySign, e2: ParitySign): ParitySign = match (e1, e2) with {
+    pub def glb(e1: ParitySign, e2: ParitySign): ParitySign = match (e1, e2) {
         case (Top, x)       => x
         case (x, Top)       => x
         case (ONeg, ONeg)   => ONeg
@@ -81,16 +81,16 @@ namespace Domain/ParitySign {
     ///
     /// Abstracts a concrete integer into the Parity domain.
     ///
-    pub def alpha(i: Int): ParitySign = switch {
-        case (i == 0) => Zer
-        case (i <= 0) => if (i % 2 != 0) ONeg else ENeg
-        case (i >= 0) => if (i % 2 != 0) OPos else EPos
+    pub def alpha(i: Int32): ParitySign = {
+        if      (i == 0)    Zer
+        else if (i <= 0)    if (i rem 2 != 0) ONeg else ENeg
+        else                if (i rem 2 != 0) OPos else EPos
     }
 
     ///
     /// Over-approximates integer `increment`.
     ///
-    pub def inc(e: ParitySign): ParitySign = match e with {
+    pub def inc(e: ParitySign): ParitySign = match e {
         case Bot    => Bot
         case ONeg   => ENeg
         case Zer    => OPos
@@ -103,7 +103,7 @@ namespace Domain/ParitySign {
     ///
     /// Over-approximates integer `decrement`.
     ///
-    pub def dec(e: ParitySign): ParitySign = match e with {
+    pub def dec(e: ParitySign): ParitySign = match e {
         case Bot    => Bot
         case ONeg   => ENeg
         case Zer    => ONeg
@@ -116,13 +116,11 @@ namespace Domain/ParitySign {
     ///
     /// Over-approximates integer `addition`.
     ///
-    pub def plus(e1: ParitySign, e2: ParitySign): ParitySign = match (e1, e2) with {
+    pub def plus(e1: ParitySign, e2: ParitySign): ParitySign = match (e1, e2) {
         case (Bot, _)   => Bot
         case (_, Bot)   => Bot
         // case (ONeg, ONeg) => Even // TODO: Need Even and Odd
         case _                                  => Top
     }
-
-    let ParitySign<> = (Bot, Top, equ, leq, lub, glb)
 
 }

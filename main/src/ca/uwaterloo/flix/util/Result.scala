@@ -52,6 +52,21 @@ sealed trait Result[T, E] {
     case Result.Err(e) => Result.Err(e)
   }
 
+  /**
+    * Returns `this` result as a [[Validation]].
+    */
+  final def toValidation: Validation[T, E] = this match {
+    case Result.Ok(t) => Validation.Success(t)
+    case Result.Err(e) => Validation.Failure(LazyList(e))
+  }
+
+  /**
+    * Returns `this` result as an [[Option]].
+    */
+  final def toOption: Option[T] = this match {
+    case Result.Ok(t) => Some(t)
+    case Result.Err(_) => None
+  }
 }
 
 object Result {

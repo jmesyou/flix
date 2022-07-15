@@ -21,7 +21,7 @@ object Name {
   /**
     * The root namespace.
     */
-  val RootNS = NName(SourcePosition.Unknown, Nil, SourcePosition.Unknown)
+  val RootNS: NName = NName(SourcePosition.Unknown, Nil, SourcePosition.Unknown)
 
   /**
     * Returns the given string `fqn` as a qualified name.
@@ -33,7 +33,14 @@ object Name {
     val index = fqn.indexOf('.')
     val parts = fqn.substring(0, index).split('/').toList
     val name = fqn.substring(index + 1, fqn.length)
-    val nname = NName(sp1, parts.map(t => Name.Ident(sp1, t, sp2)), sp2)
+    mkQName(parts, name, sp1, sp2)
+  }
+
+  /**
+    * Creates a qualified name from the given namespace `ns` and name `name`.
+    */
+  def mkQName(ns: List[String], name: String, sp1: SourcePosition, sp2: SourcePosition): QName = {
+    val nname = NName(sp1, ns.map(t => Name.Ident(sp1, t, sp2)), sp2)
     val ident = Ident(sp1, name, sp2)
     QName(sp1, nname, ident, sp2)
   }
@@ -42,6 +49,26 @@ object Name {
     * Returns the given identifier `ident` as qualified name in the root namespace.
     */
   def mkQName(ident: Ident): QName = QName(ident.sp1, RootNS, ident, ident.sp2)
+
+  /**
+    * Converts the given identifier `ident` to a field name.
+    */
+  def mkField(ident: Ident): Field = Field(ident.name, SourceLocation.mk(ident.sp1, ident.sp2))
+
+  /**
+    * Converts the given identifier `ident` to a predicate name.
+    */
+  def mkPred(ident: Ident): Pred = Pred(ident.name, SourceLocation.mk(ident.sp1, ident.sp2))
+
+  /**
+    * Converts the given identifier `ident` to a tag name.
+    */
+  def mkTag(ident: Ident): Tag = Tag(ident.name, SourceLocation.mk(ident.sp1, ident.sp2))
+
+  /**
+    * Extends the given namespace `ns` with the given identifier `ident`.
+    */
+  def extendNName(ns: NName, ident: Ident): NName = NName(ident.sp1, ns.idents :+ ident, ident.sp2)
 
   /**
     * Identifier.
@@ -54,12 +81,30 @@ object Name {
     /**
       * Returns `true`if `this` identifier is a wildcard.
       */
-    def isWild(): Boolean = name.startsWith("_")
+    def isWild: Boolean = name.startsWith("_")
+
+    /**
+      * Returns `true` if `this` identifier is uppercase.
+      */
+    def isUpper: Boolean = name.charAt(0).isUpper
 
     /**
       * The source location of the identifier.
       */
     def loc: SourceLocation = SourceLocation.mk(sp1, sp2)
+
+    /**
+      * Two identifiers are equal if they have the same name.
+      */
+    override def hashCode(): Int = name.hashCode
+
+    /**
+      * Two identifiers are equal if they have the same name.
+      */
+    override def equals(o: Any): Boolean = o match {
+      case that: Ident => this.name == that.name
+      case _ => false
+    }
 
     /**
       * Human readable representation.
@@ -158,9 +203,92 @@ object Name {
     def loc: SourceLocation = SourceLocation.mk(sp1, sp2)
 
     /**
+      * Converts this name into a namespace.
+      */
+    def toNName: NName = extendNName(namespace, ident)
+
+    /**
       * Human readable representation.
       */
     override def toString: String = if (isUnqualified) ident.toString else namespace.toString + "." + ident
+  }
+
+  /**
+    * The name of a field.
+    *
+    * @param name the name of the field.
+    * @param loc  the specific occurrence of the name.
+    */
+  case class Field(name: String, loc: SourceLocation) {
+    /**
+      * Two predicate names are equal if their names are the same.
+      */
+    override def hashCode(): Int = name.hashCode
+
+    /**
+      * Two predicate names are equal if their names are the same.
+      */
+    override def equals(o: Any): Boolean = o match {
+      case that: Field => this.name == that.name
+      case _ => false
+    }
+
+    /**
+      * Human readable representation.
+      */
+    override def toString: String = name
+  }
+
+  /**
+    * The name of a predicate.
+    *
+    * @param name the name of the predicate.
+    * @param loc  the specific occurrence of the name.
+    */
+  case class Pred(name: String, loc: SourceLocation) {
+    /**
+      * Two predicate names are equal if their names are the same.
+      */
+    override def hashCode(): Int = name.hashCode
+
+    /**
+      * Two predicate names are equal if their names are the same.
+      */
+    override def equals(o: Any): Boolean = o match {
+      case that: Pred => this.name == that.name
+      case _ => false
+    }
+
+    /**
+      * Human readable representation.
+      */
+    override def toString: String = name
+  }
+
+  /**
+    * The name of a tag.
+    *
+    * @param name the name of the predicate.
+    * @param loc  the specific occurrence of the name.
+    */
+  case class Tag(name: String, loc: SourceLocation) {
+    /**
+      * Two predicate names are equal if their names are the same.
+      */
+    override def hashCode(): Int = name.hashCode
+
+    /**
+      * Two predicate names are equal if their names are the same.
+      */
+    override def equals(o: Any): Boolean = o match {
+      case that: Tag => this.name == that.name
+      case _ => false
+    }
+
+    /**
+      * Human readable representation.
+      */
+    override def toString: String = name
   }
 
 }

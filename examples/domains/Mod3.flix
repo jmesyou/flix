@@ -8,7 +8,7 @@ namespace Domain/Mod3 {
     ///
     /// The elements of the modulo three lattice.
     ///
-    enum Mod3 {
+    enum Mod3 with Eq {
                    case Top,
 
         case Zer,  case One,  case Two,
@@ -17,15 +17,10 @@ namespace Domain/Mod3 {
     }
 
     ///
-    /// Returns `true` iff `e1` is equal to `e2`.
-    ///
-    def equ(e1: Mod3, e2: Mod3): Bool = e1 == e2
-
-    ///
     /// Returns `true` iff `e1` is less than or equal to `e2`.
     ///
-    #reflexive #antiSymmetric #transitive #leastElement(Bot) #greatestElement(Top)
-    pub def leq(e1: Mod3, e2: Mod3): Bool = match (e1, e2) with {
+//    #reflexive #antiSymmetric #transitive #leastElement(Bot) #greatestElement(Top)
+    pub def leq(e1: Mod3, e2: Mod3): Bool = match (e1, e2) {
         case (Bot, _)   => true
         case (Zer, Zer) => true
         case (One, One) => true
@@ -37,8 +32,8 @@ namespace Domain/Mod3 {
     ///
     /// Returns the least upper bound of `e1` and `e2`.
     ///
-    #upperBound #leastUpperBound #commutative #associative
-    pub def lub(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) with {
+//    #upperBound #leastUpperBound #commutative #associative
+    pub def lub(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) {
         case (Bot, x)   => x
         case (x, Bot)   => x
         case (Zer, Zer) => Zer
@@ -50,8 +45,8 @@ namespace Domain/Mod3 {
     ///
     /// Returns the greatest lower bound of `e1` and `e2`.
     ///
-    #lowerBound #greatestLowerBound #commutative #associative
-    pub def glb(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) with {
+//    #lowerBound #greatestLowerBound #commutative #associative
+    pub def glb(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) {
         case (Top, x)   => x
         case (x, Top)   => x
         case (Zer, Zer) => Zer
@@ -63,8 +58,8 @@ namespace Domain/Mod3 {
     ///
     /// The lattice height function.
     ///
-    #nonNegative #decreasing(equ, leq)
-    pub def height(e: Mod3): BigInt = match e with {
+//    #nonNegative
+    pub def height(e: Mod3): BigInt = match e {
         case Top    => 0ii
         case Zer    => 1ii
         case One    => 1ii
@@ -75,20 +70,19 @@ namespace Domain/Mod3 {
     ///
     /// Abstracts a concrete integer into the Parity domain.
     ///
-    pub def alpha(i: BigInt): Mod3 =
+    pub def alpha(i: BigInt): Mod3 = {
     // TODO: The verifier must handle errors so it never enters a Switch/MatchError.
-        switch {
-            case (i % 3ii == 1ii) || (i % 3ii == -1ii)  => One
-            case (i % 3ii == 2ii) || (i % 3ii == -2ii)  => Two
-            case true                                   => Zer
-        }
+        if      ((i rem 3ii == 1ii) or (i rem 3ii == -1ii)) One
+        else if ((i rem 3ii == 2ii) or (i rem 3ii == -2ii)) Two
+        else                                            Zer
+    }
 
     ///
     /// Over-approximates integer `increment`.
     ///
-    #safe1(x -> x + 1ii)
-    #strict1 #monotone1
-    pub def inc(e: Mod3): Mod3 = match e with {
+//    #safe1(x -> x + 1ii)
+//    #strict1 #monotone1
+    pub def inc(e: Mod3): Mod3 = match e {
        case Bot => Bot
        case Zer => One
        case One => Two
@@ -99,9 +93,9 @@ namespace Domain/Mod3 {
     ///
     /// Over-approximates integer `decrement`.
     ///
-    #safe1(x -> x - 1ii)
-    #strict1 #monotone1
-    pub def dec(e: Mod3): Mod3 = match e with {
+//    #safe1(x -> x - 1ii)
+//    #strict1 #monotone1
+    pub def dec(e: Mod3): Mod3 = match e {
        case Bot => Bot
        case Zer => Two
        case One => Zer
@@ -112,9 +106,9 @@ namespace Domain/Mod3 {
     ///
     /// Over-approximates integer `addition`.
     ///
-    #safe2((x, y) -> x + y)
-    #strict2 #monotone2 #commutative #associative
-    pub def plus(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) with {
+//    #safe2((x, y) -> x + y)
+//    #strict2 #monotone2 #commutative #associative
+    pub def plus(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) {
        case (_, Bot)   => Bot
        case (Bot, _)   => Bot
        case (Zer, x)   => x
@@ -129,9 +123,9 @@ namespace Domain/Mod3 {
     ///
     /// Over-approximates integer `subtraction`.
     ///
-    #safe2((x, y) -> x - y)
-    #strict2 #monotone2
-    pub def minus(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) with {
+//    #safe2((x, y) -> x - y)
+//    #strict2 #monotone2
+    pub def minus(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) {
        case (_, Bot)   => Bot
        case (Bot, _)   => Bot
        case (Zer, Zer) => Zer
@@ -150,8 +144,8 @@ namespace Domain/Mod3 {
     /// Over-approximates integer `multiplication`.
     ///
     /* unknown #safe2((x, y) -> x * y) */
-    #strict2 #monotone2 #commutative #associative
-    pub def times(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) with {
+//    #strict2 #monotone2 #commutative #associative
+    pub def times(e1: Mod3, e2: Mod3): Mod3 = match (e1, e2) {
         case (_, Bot)   => Bot
         case (Bot, _)   => Bot
         case (Zer, _)   => Zer
@@ -162,11 +156,11 @@ namespace Domain/Mod3 {
     ///
     /// Over-approximates `equal`.
     ///
-    #PartialOrder.safe2((x, y) -> x == y, alpha, Belnap.alpha, Belnap.leq)
-    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
-    #PartialOrder.monotone2(leq, leq, Belnap.leq)
-    #commutative
-    pub def eq(e1: Mod3, e2: Mod3): Belnap.Belnap = match (e1, e2) with {
+//    #PartialOrder.safe2((x, y) -> x == y, alpha, Belnap.alpha, Belnap.leq)
+//    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
+//    #PartialOrder.monotone2(leq, leq, Belnap.leq)
+//    #commutative
+    pub def eq(e1: Mod3, e2: Mod3): Belnap.Belnap = match (e1, e2) {
         case (Bot, _)   => Belnap/Belnap.Bot
         case (_, Bot)   => Belnap/Belnap.Bot
         case (Zer, One) => Belnap/Belnap.False
@@ -180,19 +174,19 @@ namespace Domain/Mod3 {
 
     ///
     /// Over-approximates `not equal`.
-    #PartialOrder.safe2((x, y) -> x != y, alpha, Belnap.alpha, Belnap.leq)
-    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
-    #PartialOrder.monotone2(leq, leq, Belnap.leq)
-    #commutative
+//    #PartialOrder.safe2((x, y) -> x != y, alpha, Belnap.alpha, Belnap.leq)
+//    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
+//    #PartialOrder.monotone2(leq, leq, Belnap.leq)
+//    #commutative
     pub def neq(e1: Mod3, e2: Mod3): Belnap.Belnap = Belnap.not(eq(e1, e2))
 
     ///
     /// Over-approximates `less than`.
     ///
-    #PartialOrder.safe2((x, y) -> x < y, alpha, Belnap.alpha, Belnap.leq)
-    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
-    #PartialOrder.monotone2(leq, leq, Belnap.leq)
-    pub def less(e1: Mod3, e2: Mod3): Belnap.Belnap = match (e1, e2) with {
+//    #PartialOrder.safe2((x, y) -> x < y, alpha, Belnap.alpha, Belnap.leq)
+//    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
+//    #PartialOrder.monotone2(leq, leq, Belnap.leq)
+    pub def less(e1: Mod3, e2: Mod3): Belnap.Belnap = match (e1, e2) {
         case (Bot, _) => Belnap/Belnap.Bot
         case (_, Bot) => Belnap/Belnap.Bot
         case _        => Belnap/Belnap.Top
@@ -201,39 +195,37 @@ namespace Domain/Mod3 {
     ///
     /// Over-approximates `less than or equal`.
     ///
-    #PartialOrder.safe2((x, y) -> x <= y, alpha, Belnap.alpha, Belnap.leq)
-    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
-    #PartialOrder.monotone2(leq, leq, Belnap.leq)
+//    #PartialOrder.safe2((x, y) -> x <= y, alpha, Belnap.alpha, Belnap.leq)
+//    #Bounded.strict2(Bot, Bot, Belnap/Belnap.Bot)
+//    #PartialOrder.monotone2(leq, leq, Belnap.leq)
     pub def lessEqual(e1: Mod3, e2: Mod3): Belnap.Belnap = Belnap.or(e1 `less` e2, e1 `eq` e2)
-
-    let Mod3<> = (Bot, Top, equ, leq, lub, glb)
 
     //
     // ## Specialized Laws
     //
 
-    law upperBound(lub: (Mod3, Mod3) -> Mod3): Bool = JoinLattice.upperBound(leq, lub)
+//    law upperBound(lub: (Mod3, Mod3) -> Mod3): Bool = JoinLattice.leastUpperBound1(leq, lub)
 
-    law leastUpperBound(lub: (Mod3, Mod3) -> Mod3): Bool = JoinLattice.leastUpperBound(leq, lub)
+//    law leastUpperBound(lub: (Mod3, Mod3) -> Mod3): Bool = JoinLattice.leastUpperBound2(leq, lub)
 
-    law lowerBound(glb: (Mod3, Mod3) -> Mod3): Bool = MeetLattice.lowerBound(leq, glb)
+//    law lowerBound(glb: (Mod3, Mod3) -> Mod3): Bool = MeetLattice.greatestLowerBound1(leq, glb)
 
-    law greatestLowerBound(glb: (Mod3, Mod3) -> Mod3): Bool = MeetLattice.greatestLowerBound(leq, glb)
+//    law greatestLowerBound(glb: (Mod3, Mod3) -> Mod3): Bool = MeetLattice.greatestLowerBound2(leq, glb)
 
-    law leastElement(leq: (Mod3, Mod3) -> Bool, bot: Mod3): Bool = Bounded.leastElement(bot, leq)
+//    law leastElement(leq: (Mod3, Mod3) -> Bool, bot: Mod3): Bool = Bounded.leastElement(bot, leq)
 
-    law greatestElement(leq: (Mod3, Mod3) -> Bool, top: Mod3): Bool = Bounded.greatestElement(top, leq)
+//    law greatestElement(leq: (Mod3, Mod3) -> Bool, top: Mod3): Bool = Bounded.greatestElement(top, leq)
 
-    law strict1(f: Mod3 -> Mod3): Bool = Bounded.strict1(f, Bot, Bot)
+//    law strict1(f: Mod3 -> Mod3): Bool = Bounded.strict1(f, Bot, Bot)
 
-    law strict2(f: (Mod3, Mod3) -> Mod3): Bool = Bounded.strict2(f, Bot, Bot, Bot)
+//    law strict2(f: (Mod3, Mod3) -> Mod3): Bool = Bounded.strict2(f, Bot, Bot, Bot)
     
-    law monotone1(f: Mod3 -> Mod3): Bool = PartialOrder.monotone1(f, leq, leq)
+//    law monotone1(f: Mod3 -> Mod3): Bool = PartialOrder.monotone1(f, leq, leq)
 
-    law monotone2(f: (Mod3, Mod3) -> Mod3): Bool = PartialOrder.monotone2(f, leq, leq, leq)
+//    law monotone2(f: (Mod3, Mod3) -> Mod3): Bool = PartialOrder.monotone2(f, leq, leq, leq)
 
-    law safe1(fa: Mod3 -> Mod3, fc: BigInt -> BigInt): Bool = PartialOrder.safe1(fa, fc, alpha, alpha, leq)
+//    law safe1(fa: Mod3 -> Mod3, fc: BigInt -> BigInt): Bool = PartialOrder.safe1(fa, fc, alpha, alpha, leq)
 
-    law safe2(fa: (Mod3, Mod3) -> Mod3, fc: (BigInt, BigInt) -> BigInt): Bool = PartialOrder.safe2(fa, fc, alpha, alpha, leq)
+//    law safe2(fa: (Mod3, Mod3) -> Mod3, fc: (BigInt, BigInt) -> BigInt): Bool = PartialOrder.safe2(fa, fc, alpha, alpha, leq)
 
 }

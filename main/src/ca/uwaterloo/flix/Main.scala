@@ -16,16 +16,17 @@
 
 package ca.uwaterloo.flix
 
+import ca.uwaterloo.flix.api.lsp.LanguageServer
+import ca.uwaterloo.flix.api.{Flix, Version}
+import ca.uwaterloo.flix.language.ast.Symbol
+import ca.uwaterloo.flix.runtime.shell.{Shell, SourceProvider}
+import ca.uwaterloo.flix.tools._
+import ca.uwaterloo.flix.util.Formatter.AnsiTerminalFormatter
+import ca.uwaterloo.flix.util._
+
 import java.io.{File, PrintWriter}
 import java.net.BindException
 import java.nio.file.Paths
-
-import ca.uwaterloo.flix.api.{Flix, Version}
-import ca.uwaterloo.flix.runtime.shell.Shell
-import ca.uwaterloo.flix.tools._
-import ca.uwaterloo.flix.util._
-import ca.uwaterloo.flix.util.vt._
-import flix.runtime.FlixError
 
 /**
   * The main entry point for the Flix compiler and runtime.
@@ -62,70 +63,102 @@ object Main {
       System.exit(0)
     }
 
-    // the default color context.
-    implicit val terminal = TerminalContext.AnsiTerminal
+    // check if the --lsp flag was passed.
+    if (cmdOpts.lsp.nonEmpty) {
+      try {
+        val languageServer = new LanguageServer(cmdOpts.lsp.get)
+        languageServer.run()
+      } catch {
+        case ex: BindException =>
+          Console.println(ex.getMessage)
+      }
+      System.exit(0)
+    }
 
-    // compute the enabled optimizations.
-    val optimizations = Optimization.All.filter {
-      case Optimization.TailCalls => !cmdOpts.xnotailcalls
+    // compute the main entry point
+    val entryPoint = cmdOpts.entryPoint match {
+      case None => Options.Default.entryPoint
+      case Some(s) => Some(Symbol.mkDefnSym(s))
     }
 
     // construct flix options.
-    val options = Options.Default.copy(
-      core = cmdOpts.xcore,
+    var options = Options.Default.copy(
+      lib = cmdOpts.xlib,
       debug = cmdOpts.xdebug,
       documentor = cmdOpts.documentor,
-      evaluation = if (cmdOpts.xinterpreter) Evaluation.Interpreted else Evaluation.Compiled,
-      optimizations = optimizations,
-      mode = if (cmdOpts.release) CompilationMode.Release else CompilationMode.Development,
-      monitor = cmdOpts.monitor,
-      quickchecker = cmdOpts.quickchecker,
-      verbosity = if (cmdOpts.verbose) Verbosity.Verbose else Verbosity.Normal,
-      verifier = cmdOpts.verifier,
-      writeClassFiles = !cmdOpts.interactive,
-      xallowredundancies = cmdOpts.xallowredundancies,
-      xnostratifier = cmdOpts.xnostratifier
+      entryPoint = entryPoint,
+      explain = cmdOpts.explain,
+      json = cmdOpts.json,
+      output = cmdOpts.output.map(s => Paths.get(s)),
+      progress = true,
+      threads = cmdOpts.threads.getOrElse(Runtime.getRuntime.availableProcessors()),
+      xnobooltable = cmdOpts.xnobooltable,
+      xstatistics = cmdOpts.xstatistics,
+      xstrictmono = cmdOpts.xstrictmono
     )
+
+    // Don't use progress bar if benchmarking.
+    if (cmdOpts.benchmark || cmdOpts.xbenchmarkCodeSize || cmdOpts.xbenchmarkIncremental || cmdOpts.xbenchmarkPhases || cmdOpts.xbenchmarkThroughput) {
+      options = options.copy(progress = false)
+    }
+
+    // Don't use progress bar if not attached to a console.
+    if (System.console() == null) {
+      options = options.copy(progress = false)
+    }
+
+    val cwd = Paths.get(".").toAbsolutePath.normalize()
 
     // check if command was passed.
     try {
-      val cwd = Paths.get(".")
-
       cmdOpts.command match {
         case Command.None =>
         // nop, continue
 
         case Command.Init =>
-          Packager.init(cwd, options)
-          System.exit(0)
+          val result = Packager.init(cwd, options)
+          System.exit(getCode(result))
 
         case Command.Check =>
-          Packager.check(cwd, options)
-          System.exit(0)
+          val result = Packager.check(cwd, options)
+          System.exit(getCode(result))
 
         case Command.Build =>
-          Packager.build(cwd, options)
-          System.exit(0)
+          val result = Packager.build(cwd, options, loadClasses = false)
+          System.exit(getCode(result))
 
         case Command.BuildJar =>
-          Packager.buildJar(cwd, options)
-          System.exit(0)
+          val result = Packager.buildJar(cwd, options)
+          System.exit(getCode(result))
 
         case Command.BuildPkg =>
-          Packager.buildPkg(cwd, options)
-          System.exit(0)
+          val result = Packager.buildPkg(cwd, options)
+          System.exit(getCode(result))
 
         case Command.Run =>
-          Packager.run(cwd, options)
-          System.exit(0)
+          val result = Packager.run(cwd, options)
+          System.exit(getCode(result))
 
         case Command.Benchmark =>
-          Packager.benchmark(cwd, options)
-          System.exit(0)
+          val o = options.copy(progress = false)
+          val result = Packager.benchmark(cwd, o)
+          System.exit(getCode(result))
 
         case Command.Test =>
-          Packager.test(cwd, options)
+          val o = options.copy(progress = false)
+          val result = Packager.test(cwd, o)
+          System.exit(getCode(result))
+
+        case Command.Repl =>
+          val source = if (cmdOpts.files.isEmpty) SourceProvider.ProjectPath(cwd) else SourceProvider.SourceFileList(cmdOpts.files)
+          val shell = new Shell(source, options)
+          shell.loop()
           System.exit(0)
+
+        case Command.Install(project) =>
+          val o = options.copy(progress = false)
+          val result = Packager.install(project, cwd, o)
+          System.exit(getCode(result))
       }
     } catch {
       case ex: RuntimeException =>
@@ -133,22 +166,33 @@ object Main {
         System.exit(1)
     }
 
-    // check if the -Xbenchmark-phases flag was passed.
+    // check if the --Xbenchmark-code-size flag was passed.
+    if (cmdOpts.xbenchmarkCodeSize) {
+      BenchmarkCompiler.benchmarkCodeSize(options)
+      System.exit(0)
+    }
+
+    // check if the --Xbenchmark-incremental flag was passed.
+    if (cmdOpts.xbenchmarkIncremental) {
+      BenchmarkCompiler.benchmarkIncremental(options)
+      System.exit(0)
+    }
+
+    // check if the --Xbenchmark-phases flag was passed.
     if (cmdOpts.xbenchmarkPhases) {
-      BenchmarkCompiler.benchmarkPhases()
+      BenchmarkCompiler.benchmarkPhases(options)
       System.exit(0)
     }
 
-    // check if the -Xbenchmark-throughput flag was passed.
+    // check if the --Xbenchmark-throughput flag was passed.
     if (cmdOpts.xbenchmarkThroughput) {
-      BenchmarkCompiler.benchmarkThroughput()
+      BenchmarkCompiler.benchmarkThroughput(options)
       System.exit(0)
     }
 
-    // check if running in interactive mode.
-    val interactive = cmdOpts.interactive || (cmdOpts.command == Command.None && cmdOpts.files.isEmpty)
-    if (interactive) {
-      val shell = new Shell(cmdOpts.files.toList.map(_.toPath), options)
+    // check if we should start a REPL
+    if (cmdOpts.command == Command.None && cmdOpts.files.isEmpty) {
+      val shell = new Shell(SourceProvider.ProjectPath(cwd), options)
       shell.loop()
       System.exit(0)
     }
@@ -157,71 +201,89 @@ object Main {
     val flix = new Flix()
     flix.setOptions(options)
     for (file <- cmdOpts.files) {
-      flix.addPath(file.toPath)
-    }
-
-    // compute the least model.
-    try {
-      val timer = new Timer(flix.compile())
-      timer.getResult match {
-        case Validation.Success(compilationResult) =>
-
-          compilationResult.getMain match {
-            case None => // nop
-            case Some(m) =>
-              val evalTimer = new Timer(compilationResult.evalToString("main"))
-              options.verbosity match {
-                case Verbosity.Normal => Console.println(evalTimer.getResult)
-                case Verbosity.Verbose => Console.println(evalTimer.getResult)
-                case Verbosity.Silent => // nop
-              }
-          }
-
-          if (cmdOpts.benchmark) {
-            Benchmarker.benchmark(compilationResult, new PrintWriter(System.out, true))
-          }
-
-          if (cmdOpts.test) {
-            val results = Tester.test(compilationResult)
-            Console.println(results.output.fmt)
-          }
-        case Validation.Failure(errors) =>
-          errors.sortBy(_.source.name).foreach(e => println(e.message.fmt))
-          println()
-          println(s"Compilation failed with ${errors.length} error(s).")
+      val ext = file.getName.split('.').last
+      ext match {
+        case "flix" => flix.addSourcePath(file.toPath)
+        case "fpkg" => flix.addSourcePath(file.toPath)
+        case "jar" => flix.addJar(file.toPath)
+        case _ =>
+          Console.println(s"Unrecognized file extension: '$ext'.")
           System.exit(1)
       }
-    } catch {
-      case ex: FlixError =>
-        Console.println(ex.getMessage)
+    }
+    if (Formatter.hasColorSupport)
+      flix.setFormatter(AnsiTerminalFormatter)
+
+    // evaluate main.
+    val timer = new Timer(flix.compile())
+    timer.getResult match {
+      case Validation.Success(compilationResult) =>
+
+        compilationResult.getMain match {
+          case None => // nop
+          case Some(m) =>
+            // Compute the arguments to be passed to main.
+            val args: Array[String] = cmdOpts.args match {
+              case None => Array.empty
+              case Some(a) => a.split(" ")
+            }
+            // Invoke main with the supplied arguments.
+            m(args)
+
+            // Exit.
+            System.exit(0)
+        }
+
+        if (cmdOpts.benchmark) {
+          Benchmarker.benchmark(compilationResult, new PrintWriter(System.out, true))(options)
+        }
+
+        if (cmdOpts.test) {
+          val results = Tester.test(compilationResult)
+          Console.println(results.output(flix.getFormatter))
+        }
+      case Validation.Failure(errors) =>
+        flix.mkMessages(errors.sortBy(_.source.name))
+          .foreach(println)
+        println()
+        println(s"Compilation failed with ${errors.length} error(s).")
         System.exit(1)
     }
+  }
 
+  /**
+    * Extracts the exit code from the given result.
+    */
+  private def getCode(result: Result[_, Int]): Int = result match {
+    case Result.Ok(_) => 0
+    case Result.Err(code) => code
   }
 
   /**
     * A case class representing the parsed command line options.
     */
   case class CmdOpts(command: Command = Command.None,
+                     args: Option[String] = None,
                      benchmark: Boolean = false,
                      documentor: Boolean = false,
-                     interactive: Boolean = false,
+                     entryPoint: Option[String] = None,
+                     explain: Boolean = false,
+                     json: Boolean = false,
                      listen: Option[Int] = None,
-                     monitor: Boolean = false,
-                     quickchecker: Boolean = false,
-                     release: Boolean = false,
+                     lsp: Option[Int] = None,
+                     output: Option[String] = None,
                      test: Boolean = false,
-                     verbose: Boolean = false,
-                     verifier: Boolean = false,
-                     xallowredundancies: Boolean = false,
+                     threads: Option[Int] = None,
+                     xbenchmarkCodeSize: Boolean = false,
+                     xbenchmarkIncremental: Boolean = false,
                      xbenchmarkPhases: Boolean = false,
                      xbenchmarkThroughput: Boolean = false,
-                     xcore: Boolean = false,
+                     xlib: LibLevel = LibLevel.All,
                      xdebug: Boolean = false,
-                     xinterpreter: Boolean = false,
-                     xinvariants: Boolean = false,
-                     xnostratifier: Boolean = false,
-                     xnotailcalls: Boolean = false,
+                     xnobooltable: Boolean = false,
+                     xstatistics: Boolean = false,
+                     xstrictmono: Boolean = false,
+                     xeffects: Boolean = false,
                      files: Seq[File] = Seq())
 
   /**
@@ -249,6 +311,10 @@ object Main {
 
     case object Test extends Command
 
+    case object Repl extends Command
+
+    case class Install(project: String) extends Command
+
   }
 
   /**
@@ -257,116 +323,127 @@ object Main {
     * @param args the arguments array.
     */
   def parseCmdOpts(args: Array[String]): Option[CmdOpts] = {
+    implicit val readInclusion: scopt.Read[LibLevel] = scopt.Read.reads {
+      case "nix" => LibLevel.Nix
+      case "min" => LibLevel.Min
+      case "all" => LibLevel.All
+      case arg => throw new IllegalArgumentException(s"'$arg' is not a valid library level. Valid options are 'all', 'min', and 'nix'.")
+    }
+
     val parser = new scopt.OptionParser[CmdOpts]("flix") {
 
       // Head
       head("The Flix Programming Language", Version.CurrentVersion.toString)
 
       // Command
-      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  create a new project in the current directory.")
+      cmd("init").action((_, c) => c.copy(command = Command.Init)).text("  creates a new project in the current directory.")
 
-      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  type checks the current project.")
+      cmd("check").action((_, c) => c.copy(command = Command.Check)).text("  checks the current project for errors.")
 
-      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  build the current project.")
+      cmd("build").action((_, c) => c.copy(command = Command.Build)).text("  builds (i.e. compiles) the current project.")
 
-      cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  build a jar-file for the current project.")
+      cmd("build-jar").action((_, c) => c.copy(command = Command.BuildJar)).text("  builds a jar-file from the current project.")
 
-      cmd("build-pkg").action((_, c) => c.copy(command = Command.BuildPkg)).text("  build a fpkg-file for the current project.")
+      cmd("build-pkg").action((_, c) => c.copy(command = Command.BuildPkg)).text("  builds a fpkg-file from the current project.")
 
-      cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  run main for the current project.")
+      cmd("run").action((_, c) => c.copy(command = Command.Run)).text("  runs main for the current project.")
 
-      cmd("benchmark").action((_, c) => c.copy(command = Command.Benchmark)).text("  run benchmarks for the current project.")
+      cmd("benchmark").action((_, c) => c.copy(command = Command.Benchmark)).text("  runs the benchmarks for the current project.")
 
-      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  run tests for the current project.")
+      cmd("test").action((_, c) => c.copy(command = Command.Test)).text("  runs the tests for the current project.")
+
+      cmd("repl").action((_, c) => c.copy(command = Command.Repl)).text("  starts a repl for the current project, or provided Flix source files.")
+
+      cmd("install").text("  installs the Flix package from the given GitHub <owner>/<repo>")
+        .children(
+          arg[String]("project").action((project, c) => c.copy(command = Command.Install(project)))
+            .required()
+        )
 
       note("")
 
-      // Benchmark.
+      opt[String]("args").action((s, c) => c.copy(args = Some(s))).
+        valueName("<a1, a2, ...>").
+        text("arguments passed to main. Must be a single quoted string.")
+
       opt[Unit]("benchmark").action((_, c) => c.copy(benchmark = true)).
         text("runs benchmarks.")
 
-      // Doc.
       opt[Unit]("doc").action((_, c) => c.copy(documentor = true)).
         text("generates HTML documentation.")
 
-      // Help.
+      opt[String]("entrypoint").action((s, c) => c.copy(entryPoint = Some(s))).
+        text("specifies the main entry point.")
+
+      opt[Unit]("explain").action((_, c) => c.copy(explain = true)).
+        text("provides suggestions on how to solve a problem")
+
       help("help").text("prints this usage information.")
 
-      // Interactive.
-      opt[Unit]("interactive").action((f, c) => c.copy(interactive = true)).
-        text("enables interactive mode.")
+      opt[Unit]("json").action((_, c) => c.copy(json = true)).
+        text("enables json output.")
 
-      // Listen.
       opt[Int]("listen").action((s, c) => c.copy(listen = Some(s))).
         valueName("<port>").
-        text("listens on the given port.")
+        text("starts the socket server and listens on the given port.")
 
-      // Monitor.
-      opt[Unit]("monitor").action((_, c) => c.copy(monitor = true)).
-        text("enables the debugger and profiler.")
+      opt[Int]("lsp").action((s, c) => c.copy(lsp = Some(s))).
+        valueName("<port>").
+        text("starts the LSP server and listens on the given port.")
 
-      // Quickchecker.
-      opt[Unit]("quickchecker").action((_, c) => c.copy(quickchecker = true)).
-        text("enables the quickchecker.")
+      opt[String]("output").action((s, c) => c.copy(output = Some(s))).
+        text("specifies the output directory for JVM bytecode.")
 
-      // Release.
-      opt[Unit]("release").action((_, c) => c.copy(release = true)).
-        text("enables release mode.")
-
-      // Test.
       opt[Unit]("test").action((_, c) => c.copy(test = true)).
         text("runs unit tests.")
 
-      // Verbose.
-      opt[Unit]("verbose").action((_, c) => c.copy(verbose = true))
-        .text("enables verbose output.")
+      opt[Int]("threads").action((n, c) => c.copy(threads = Some(n))).
+        text("number of threads to use for compilation.")
 
-      // Verifier.
-      opt[Unit]("verifier").action((_, c) => c.copy(verifier = true)).
-        text("enables the verifier.")
-
-      // Version.
       version("version").text("prints the version number.")
 
       // Experimental options:
       note("")
       note("The following options are experimental:")
 
-      // Xallow-redundancies.
-      opt[Unit]("Xallow-redundancies").action((_, c) => c.copy(xallowredundancies = true)).
-        text("[experimental] disables the redundancies checker.")
+      // Xbenchmark-code-size
+      opt[Unit]("Xbenchmark-code-size").action((_, c) => c.copy(xbenchmarkCodeSize = true)).
+        text("[experimental] benchmarks the size of the generated JVM files.")
+
+      // Xbenchmark-incremental
+      opt[Unit]("Xbenchmark-incremental").action((_, c) => c.copy(xbenchmarkIncremental = true)).
+        text("[experimental] benchmarks the performance of each compiler phase in incremental mode.")
 
       // Xbenchmark-phases
       opt[Unit]("Xbenchmark-phases").action((_, c) => c.copy(xbenchmarkPhases = true)).
-        text("[experimental] benchmarks each individual compiler phase.")
+        text("[experimental] benchmarks the performance of each compiler phase.")
 
       // Xbenchmark-throughput
       opt[Unit]("Xbenchmark-throughput").action((_, c) => c.copy(xbenchmarkThroughput = true)).
-        text("[experimental] benchmarks the throughput of the entire compiler.")
-
-      // Xcore.
-      opt[Unit]("Xcore").action((_, c) => c.copy(xcore = true)).
-        text("[experimental] disables loading of all non-essential namespaces.")
+        text("[experimental] benchmarks the performance of the entire compiler.")
 
       // Xdebug.
       opt[Unit]("Xdebug").action((_, c) => c.copy(xdebug = true)).
-        text("[experimental] enables output of debugging information.")
+        text("[experimental] enables compiler debugging output.")
 
-      // Xinterpreter.
-      opt[Unit]("Xinterpreter").action((_, c) => c.copy(xinterpreter = true)).
-        text("[experimental] enables interpreted evaluation.")
+      // Xlib
+      opt[LibLevel]("Xlib").action((arg, c) => c.copy(xlib = arg)).
+        text("[experimental] controls the amount of std. lib. to include (nix, min, all).")
 
-      // Xinvariants.
-      opt[Unit]("Xinvariants").action((_, c) => c.copy(xinvariants = true)).
-        text("[experimental] enables compiler invariants.")
+      // Xno-bool-table
+      opt[Unit]("Xno-bool-table").action((_, c) => c.copy(xnobooltable = true)).
+        text("[experimental] disables Boolean minimization via tabling.")
 
-      // Xno-stratifier
-      opt[Unit]("Xno-stratifier").action((_, c) => c.copy(xnostratifier = true)).
-        text("[experimental] disables computation of stratification.")
+      // Xstatistics
+      opt[Unit]("Xstatistics").action((_, c) => c.copy(xstatistics = true)).
+        text("[experimental] prints compilation statistics.")
 
-      // Xno-tailcalls
-      opt[Unit]("Xno-tailcalls").action((_, c) => c.copy(xnotailcalls = true)).
-        text("[experimental] disables tail call elimination.")
+      // Xstrictmono
+      opt[Unit]("Xstrictmono").action((_, c) => c.copy(xstrictmono = true)).
+        text("[experimental] enable strict monomorphization.")
+
+      opt[Unit]("Xeffects").action((_, c) => c.copy(xeffects = true)).
+        text("[experimental] enable set effects")
 
       note("")
 
@@ -374,7 +451,7 @@ object Main {
       arg[File]("<file>...").action((x, c) => c.copy(files = c.files :+ x))
         .optional()
         .unbounded()
-        .text("input Flix source code files.")
+        .text("input Flix source code files, Flix packages, and Java archives.")
 
     }
 

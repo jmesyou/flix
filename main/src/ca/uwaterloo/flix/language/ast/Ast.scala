@@ -17,6 +17,7 @@
 package ca.uwaterloo.flix.language.ast
 
 import java.nio.file.Path
+import java.util.Objects
 
 /**
   * A collection of AST nodes that are shared across multiple ASTs.
@@ -32,13 +33,17 @@ object Ast {
 
     /**
       * A source that is backed by an internal resource.
+      *
+      * A source is stable if it cannot change after being loaded (e.g. the standard library, etc).
       */
-    case class Internal(name: String, text: String) extends Input
+    case class Text(name: String, text: String, stable: Boolean) extends Input {
+      override def hashCode(): Int = name.hashCode
 
-    /**
-      * A source that is backed by a regular string.
-      */
-    case class Str(text: String) extends Input
+      override def equals(obj: Any): Boolean = obj match {
+        case that: Text => this.name == that.name
+        case _ => false
+      }
+    }
 
     /**
       * A source that is backed by a regular file.
@@ -54,15 +59,24 @@ object Ast {
 
   /**
     * A source is a name and an array of character data.
+    *
+    * A source is stable if it cannot change after being loaded (e.g. the standard library, etc).
     */
-  case class Source(name: String, data: Array[Char]) {
-    def format: String = name
+  case class Source(input: Input, data: Array[Char], stable: Boolean) extends Sourceable {
 
-    override def equals(o: scala.Any): Boolean = o match {
-      case that: Source => this.name == that.name
+    def name: String = input match {
+      case Input.Text(name, _, _) => name
+      case Input.TxtFile(path) => path.toString
+      case Input.PkgFile(path) => path.toString
     }
 
-    override def hashCode(): Int = name.hashCode
+    def src: Source = this
+
+    override def equals(o: scala.Any): Boolean = o match {
+      case that: Source => this.input == that.input
+    }
+
+    override def hashCode(): Int = input.hashCode()
   }
 
   /**
@@ -79,19 +93,9 @@ object Ast {
       *
       * @param loc the source location of the annotation.
       */
+    // NB: Deprecated
     case class Benchmark(loc: SourceLocation) extends Annotation {
       override def toString: String = "@benchmark"
-    }
-
-    /**
-      * An AST node that represents a `@law` annotation.
-      *
-      * A `law` function is a property (theorem) about the behaviour of one or more functions.
-      *
-      * @param loc the source location of the annotation.
-      */
-    case class Law(loc: SourceLocation) extends Annotation {
-      override def toString: String = "@law"
     }
 
     /**
@@ -101,24 +105,99 @@ object Ast {
       *
       * @param loc the source location of the annotation.
       */
+    // NB: Deprecated
     case class Test(loc: SourceLocation) extends Annotation {
       override def toString: String = "@test"
     }
 
     /**
-      * An AST node that represents an `@unchecked` annotation.
-      *
-      * The properties of a function marked `@unchecked` are not checked by the verifier.
-      *
-      * E.g. if a function is marked @commutative and @unchecked then
-      * no attempt is made to check that the function is actually commutative.
-      * However, the compiler and run-time is still permitted to assume that the
-      * function is commutative.
+      * An annotation that marks a construct as deprecated.
       *
       * @param loc the source location of the annotation.
       */
-    case class Unchecked(loc: SourceLocation) extends Annotation {
-      override def toString: String = "@unchecked"
+    case class Deprecated(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Deprecated"
+    }
+
+    /**
+      * An annotation that marks a construct as experimental.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class Experimental(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Experimental"
+    }
+
+    /**
+      * An annotation that marks a construct as internal.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class Internal(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Internal"
+    }
+
+    /**
+      * An annotation that marks a function definition as using parallel evaluation.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class Parallel(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Parallel"
+    }
+
+    /**
+      * An annotation that marks a function definition as using parallel evaluation when given a pure function argument.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class ParallelWhenPure(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@ParallelWhenPure"
+    }
+
+    /**
+      * An annotation that marks a function definition as using lazy evaluation.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class Lazy(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Lazy"
+    }
+
+    /**
+      * An annotation that marks a function definition as using lazy evaluation when given a pure function argument.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class LazyWhenPure(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@LazyWhenPure"
+    }
+
+    /**
+      * An annotation that indicates the space complexity of a function definition.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class Space(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Space"
+    }
+
+    /**
+      * An annotation that indicates the time complexity of a function definition.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class Time(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Time"
+    }
+
+    /**
+      * An annotation that marks a function definition as being inherently unsafe.
+      *
+      * @param loc the source location of the annotation.
+      */
+    case class Unsafe(loc: SourceLocation) extends Annotation {
+      override def toString: String = "@Unsafe"
     }
 
   }
@@ -144,19 +223,10 @@ object Ast {
     def isBenchmark: Boolean = annotations exists (_.isInstanceOf[Annotation.Benchmark])
 
     /**
-      * Returns `true` if `this` sequence contains the `@law` annotation.
-      */
-    def isLaw: Boolean = annotations exists (_.isInstanceOf[Annotation.Law])
-
-    /**
       * Returns `true` if `this` sequence contains the `@test` annotation.
       */
     def isTest: Boolean = annotations exists (_.isInstanceOf[Annotation.Test])
 
-    /**
-      * Returns `true` if `this` sequence contains the `@unchecked` annotation.
-      */
-    def isUnchecked: Boolean = annotations exists (_.isInstanceOf[Annotation.Unchecked])
   }
 
   /**
@@ -166,7 +236,10 @@ object Ast {
     * @param loc   the source location of the text.
     */
   case class Doc(lines: List[String], loc: SourceLocation) {
-    def text: String = lines.mkString("\n")
+    def text: String = lines.
+      dropWhile(_.trim.isEmpty).
+      map(_.trim).
+      mkString("\n")
   }
 
   /**
@@ -183,10 +256,26 @@ object Ast {
     * A sequence of modifiers.
     */
   case class Modifiers(mod: List[Modifier]) {
+
     /**
-      * Returns `true` if these modifiers contain the inline modifier.
+      * Returns a new modifier sequence with `pub` added.
       */
-    def isInline: Boolean = mod contains Modifier.Inline
+    def asPublic: Modifiers = if (isPublic) this else Modifiers(Modifier.Public :: mod)
+
+    /**
+      * Returns `true` if these modifiers contain the lawful modifier.
+      */
+    def isLawful: Boolean = mod contains Modifier.Lawful
+
+    /**
+      * Returns `true` if these modifiers contain the opaque modifier.
+      */
+    def isOpaque: Boolean = mod contains Modifier.Opaque
+
+    /**
+      * Returns `true` if these modifiers contain the override modifier.
+      */
+    def isOverride: Boolean = mod contains Modifier.Override
 
     /**
       * Returns `true` if these modifiers contain the public modifier.
@@ -194,9 +283,15 @@ object Ast {
     def isPublic: Boolean = mod contains Modifier.Public
 
     /**
+      * Returns `true` if these modifiers contain the sealed modifier.
+      */
+    def isSealed: Boolean = mod contains Modifier.Sealed
+
+    /**
       * Returns `true` if these modifiers contain the synthetic modifier.
       */
     def isSynthetic: Boolean = mod contains Modifier.Synthetic
+
   }
 
   /**
@@ -207,9 +302,19 @@ object Ast {
   object Modifier {
 
     /**
-      * The inline modifier.
+      * The lawful modifier.
       */
-    case object Inline extends Modifier
+    case object Lawful extends Modifier
+
+    /**
+      * The opaque modifier.
+      */
+    case object Opaque extends Modifier
+
+    /**
+      * The override modifier.
+      */
+    case object Override extends Modifier
 
     /**
       * The public modifier.
@@ -217,9 +322,33 @@ object Ast {
     case object Public extends Modifier
 
     /**
+      * The sealed modifier.
+      */
+    case object Sealed extends Modifier
+
+    /**
       * The synthetic modifier.
       */
     case object Synthetic extends Modifier
+
+  }
+
+  /**
+    * A common super-type for the denotation of an atom.
+    */
+  sealed trait Denotation
+
+  object Denotation {
+
+    /**
+      * The atom has a relational denotation.
+      */
+    case object Relational extends Denotation
+
+    /**
+      * The atom has a latticenal denotation.
+      */
+    case object Latticenal extends Denotation
 
   }
 
@@ -243,69 +372,93 @@ object Ast {
   }
 
   /**
-    * Represents a dependency between two predicate symbols.
+    * A common super-type for the fixity of an atom.
     */
-  sealed trait DependencyEdge
+  sealed trait Fixity
 
-  object DependencyEdge {
-
-    /**
-      * Represents a positive labelled edge.
-      */
-    case class Positive(head: Symbol.PredSym, body: Symbol.PredSym, loc: SourceLocation) extends DependencyEdge
+  object Fixity {
 
     /**
-      * Represents a negative labelled edge.
+      * The atom is loose (it does not have to be fully materialized before it can be used).
       */
-    case class Negative(head: Symbol.PredSym, body: Symbol.PredSym, loc: SourceLocation) extends DependencyEdge
+    case object Loose extends Fixity
 
-  }
-
-  object DependencyGraph {
     /**
-      * The empty dependency graph.
+      * The atom is fixed (it must be fully materialized before it can be used).
       */
-    val empty: DependencyGraph = DependencyGraph(Set.empty)
+    case object Fixed extends Fixity
 
   }
 
   /**
-    * Represents a dependency graph; a set of dependency edges.
+    * Represents a positive or negative labelled dependency edge.
+    *
+    * The labels represent predicate nodes that must co-occur for the dependency to be relevant.
     */
-  case class DependencyGraph(xs: Set[DependencyEdge]) {
+  case class LabelledEdge(head: Name.Pred, polarity: Polarity, fixity: Fixity, labels: Vector[Label], body: Name.Pred, loc: SourceLocation)
+
+  /**
+    * Represents a label in the labelled graph.
+    */
+  case class Label(pred: Name.Pred, den: Denotation, arity: Int, terms: List[Type])
+
+  object LabelledGraph {
     /**
-      * Returns a dependency graph with all dependency edges in `this` and `that` dependency graph.
+      * The empty labelled graph.
       */
-    def +(that: DependencyGraph): DependencyGraph = {
-      if (this eq DependencyGraph.empty)
+    val empty: LabelledGraph = LabelledGraph(Vector.empty)
+  }
+
+  /**
+    * Represents a labelled graph; the dependency graph with additional labels
+    * on the edges allowing more accurate filtering. The rule `A :- not B, C` would
+    * add dependency edges `B -x> A` and `C -> A`. The labelled graph can then
+    * add labels that allow the two edges to be filtered out together. If we
+    * look at a program consisting of A, B, and D. then the rule `C -> A`
+    * cannot be relevant, but by remembering that B occurred together with A,
+    * we can also rule out `B -x> A`. The labelled edges would be `B -[C]-x> A`
+    * and `C -[B]-> A`.
+    */
+  case class LabelledGraph(edges: Vector[LabelledEdge]) {
+    /**
+      * Returns a labelled graph with all labelled edges in `this` and `that` labelled graph.
+      */
+    def +(that: LabelledGraph): LabelledGraph = {
+      if (this eq LabelledGraph.empty)
         that
-      else if (that eq DependencyGraph.empty)
+      else if (that eq LabelledGraph.empty)
         this
       else
-        DependencyGraph(this.xs ++ that.xs)
+        LabelledGraph(this.edges ++ that.edges)
     }
 
     /**
-      * Returns `this` dependency graph including only the edges where both the source and destination are in `syms`.
+      * Returns `this` labelled graph including only the edges where all its labels are in
+      * `syms` and the labels match according to `'`labelEq`'`.
+      *
+      * A rule like `A(ta) :- B(tb), not C(tc).` is represented by `edge(A, pos, {la, lb, lc}, B)` etc.
+      * and is only included in the output if `syms` contains all of `la.pred, lb.pred, lc.pred` and `labelEq(syms(A), la)` etc.
       */
-    def restrict(syms: Set[Symbol.PredSym]): DependencyGraph =
-      DependencyGraph(xs.filter {
-        case DependencyEdge.Positive(x, y, _) => syms.contains(x) && syms.contains(y)
-        case DependencyEdge.Negative(x, y, _) => syms.contains(x) && syms.contains(y)
+    def restrict(syms: Map[Name.Pred, Label], labelEq: (Label, Label) => Boolean): LabelledGraph = {
+      def include(l: Label): Boolean = syms.get(l.pred).exists(l2 => labelEq(l, l2))
+
+      LabelledGraph(edges.filter {
+        case LabelledEdge(_, _, _, labels, _, _) => labels.forall(include)
       })
+    }
   }
 
   object Stratification {
     /**
       * Represents the empty stratification.
       */
-    val Empty: Stratification = Stratification(Map.empty)
+    val empty: Stratification = Stratification(Map.empty)
   }
 
   /**
     * Represents a stratification that maps every predicate symbol to its stratum.
     */
-  case class Stratification(m: Map[Symbol.PredSym, Int])
+  case class Stratification(m: Map[Name.Pred, Int])
 
   /**
     * A hole context consists of a hole symbol and its type together with the local environment.
@@ -322,4 +475,146 @@ object Ast {
     */
   case class EliminatedBy(clazz: java.lang.Class[_]) extends scala.annotation.StaticAnnotation
 
+  case object TypeConstraint {
+    /**
+      * Represents the head (located class) of a type constraint.
+      */
+    case class Head(sym: Symbol.ClassSym, loc: SourceLocation)
+  }
+
+  /**
+    * Represents that the type `arg` must belong to class `sym`.
+    */
+  case class TypeConstraint(head: TypeConstraint.Head, arg: Type, loc: SourceLocation) {
+    override def equals(o: Any): Boolean = o match {
+      case that: TypeConstraint =>
+        this.head.sym == that.head.sym && this.arg == that.arg
+      case _ => false
+    }
+
+    override def hashCode(): Int = Objects.hash(head.sym, arg)
+  }
+
+  /**
+    * Represents a use of an effect sym.
+    */
+  case class EffectSymUse(sym: Symbol.EffectSym, loc: SourceLocation)
+
+  /**
+    * Represents a reference to an effect operation.
+    */
+  case class OpSymUse(sym: Symbol.OpSym, loc: SourceLocation)
+
+  /**
+    * Represents that an instance on type `tpe` has the type constraints `tconstrs`.
+    */
+  case class Instance(tpe: Type, tconstrs: List[Ast.TypeConstraint])
+
+  /**
+    * Represents the super classes and instances available for a particular class.
+    */
+  case class ClassContext(superClasses: List[Symbol.ClassSym], instances: List[Ast.Instance])
+
+  /**
+    * Represents a derivation on an enum (e.g. `enum E with Eq`).
+    */
+  case class Derivation(clazz: Symbol.ClassSym, loc: SourceLocation)
+
+  /**
+    * Represents the way a variable is bound.
+    */
+  sealed trait BoundBy
+
+  object BoundBy {
+
+    /**
+      * Represents a variable that is bound by a formal parameter.
+      */
+    case object FormalParam extends BoundBy
+
+    /**
+      * Represents a variable that is bound by a let-binding.
+      */
+    case object Let extends BoundBy
+
+    /**
+      * Represents a variable that is bound by a pattern.
+      */
+    case object Pattern extends BoundBy
+
+    /**
+      * Represents a variable that is bound by a select.
+      */
+    case object SelectRule extends BoundBy
+
+    /**
+      * Represents a variable that is bound by a catch rule.
+      */
+    case object CatchRule extends BoundBy
+
+    /**
+      * Represents a variable that is bound by a constraint.
+      */
+    case object Constraint extends BoundBy
+
+  }
+
+  /**
+    * Represents the text of a variable.
+    */
+  sealed trait VarText {
+
+    /**
+      * A measure of precision of the text.
+      */
+    private def precision: Int = this match {
+      case VarText.Absent => 0
+      case VarText.FallbackText(_) => 1
+      case VarText.SourceText(_) => 2
+    }
+
+    /**
+      * Returns true if `this` VarText is less precise than `that` VarText.
+      *
+      * More precise text should be preferred when choosing a text to use when substituting.
+      *
+      */
+    def isStrictlyLessPreciseThan(that: VarText): Boolean = this.precision < that.precision
+  }
+
+  object VarText {
+    /**
+      * The variable has no associated text.
+      */
+    case object Absent extends VarText
+
+    /**
+      * The variable is associated with the string `s` taken directly from the source code.
+      */
+    case class SourceText(s: String) extends VarText
+
+    /**
+      * The variable is associated string `s`, used as a fallback since no source text is available.
+      */
+    case class FallbackText(s: String) extends VarText
+  }
+
+  case class PurityAndEffect(pur: Option[Type], eff: Option[List[Type]])
+
+  /**
+    * Enum representing whether a type is ascribed or inferred.
+    */
+  sealed trait TypeSource
+
+  object TypeSource {
+    /**
+      * The type is ascribed (present in the source code).
+      */
+    case object Ascribed extends TypeSource
+
+    /**
+      * The type is inferred (absent in the source code).
+      */
+    case object Inferred extends TypeSource
+  }
 }
